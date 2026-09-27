@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Place, SortMode, SyncSummary, Visit } from "./types";
+import type { Place, SaveSettingsInput, Settings, SortMode, SyncSummary, Visit } from "./types";
 
 export async function listPlaces(sort: SortMode, keyword: string): Promise<Place[]> {
   const trimmed = keyword.trim();
@@ -16,4 +16,12 @@ export async function renamePlace(placeId: number, name: string): Promise<number
 
 export async function syncNow(): Promise<SyncSummary> {
   return invoke<SyncSummary>("sync_now");
+}
+
+export async function getSettings(): Promise<Settings> {
+  return invoke<Settings>("get_settings");
+}
+
+export async function saveSettings(settings: SaveSettingsInput): Promise<void> {
+  return invoke<void>("save_settings", { settings });
 }

@@ -1,5 +1,4 @@
 mod commands;
-#[allow(dead_code)] // save_config / SecretStore::set,delete consumed by get_settings/save_settings, added in this same task's follow-up commit
 mod config;
 mod logic;
 mod sync;
@@ -57,6 +56,8 @@ pub fn run() {
             commands::visits_of,
             commands::rename_place,
             commands::sync_now,
+            commands::get_settings,
+            commands::save_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
