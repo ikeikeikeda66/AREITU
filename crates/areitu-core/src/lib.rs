@@ -63,4 +63,49 @@ pub(crate) mod testutil {
         v.extend_from_slice(&[0xFF, 0xD9]);
         v
     }
+
+    use crate::cluster::VisitCandidate;
+    use crate::resolve::geocode::{PoiGuess, ReverseGeocoder};
+    use crate::resolve::llm::LlmClient;
+    use crate::{Error, Result};
+
+    pub fn candidate(hints: &[&str]) -> VisitCandidate {
+        let t = |s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M").unwrap();
+        VisitCandidate {
+            started_at: t("2026-09-01 12:00"),
+            ended_at: t("2026-09-01 12:45"),
+            lat: 35.6812,
+            lon: 139.7671,
+            log_ids: vec![],
+            hints: hints.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    pub struct FakeGeocoder(pub Option<PoiGuess>);
+    impl ReverseGeocoder for FakeGeocoder {
+        fn reverse(&self, _: f64, _: f64) -> Result<Option<PoiGuess>> {
+            Ok(self.0.clone())
+        }
+    }
+
+    pub struct FailingGeocoder;
+    impl ReverseGeocoder for FailingGeocoder {
+        fn reverse(&self, _: f64, _: f64) -> Result<Option<PoiGuess>> {
+            Err(Error::Http("offline".into()))
+        }
+    }
+
+    pub struct PanicGeocoder;
+    impl ReverseGeocoder for PanicGeocoder {
+        fn reverse(&self, _: f64, _: f64) -> Result<Option<PoiGuess>> {
+            panic!("geocoder must not be called")
+        }
+    }
+
+    pub struct FakeLlm(pub std::result::Result<String, String>);
+    impl LlmClient for FakeLlm {
+        fn complete_json(&self, _: &str) -> Result<String> {
+            self.0.clone().map_err(Error::Http)
+        }
+    }
 }
