@@ -1,7 +1,80 @@
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::cluster::VisitCandidate;
+use crate::geo::haversine_m;
 use crate::model::{RawLog, Source};
+use crate::resolve::dictionary::record_correction;
 use crate::{Error, Result};
+
+pub const PLACE_MERGE_M: f64 = 200.0;
+
+fn find_place(conn: &Connection, name: &str, lat: f64, lon: f64, exclude: Option<i64>) -> Result<Option<i64>> {
+    let mut stmt = conn.prepare("SELECT id, lat, lon FROM places WHERE name = ?1 ORDER BY id")?;
+    let rows = stmt.query_map([name], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?, r.get::<_, f64>(2)?)))?;
+    for row in rows {
+        let (id, la, lo) = row?;
+        if Some(id) != exclude && haversine_m((lat, lon), (la, lo)) <= PLACE_MERGE_M {
+            return Ok(Some(id));
+        }
+    }
+    Ok(None)
+}
+
+pub fn find_or_create_place(conn: &Connection, name: &str, lat: f64, lon: f64) -> Result<i64> {
+    if let Some(id) = find_place(conn, name, lat, lon, None)? {
+        return Ok(id);
+    }
+    conn.execute("INSERT INTO places (name, lat, lon) VALUES (?1, ?2, ?3)", params![name, lat, lon])?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn insert_visit(conn: &Connection, place_id: i64, cand: &VisitCandidate, method: &str) -> Result<i64> {
+    conn.execute(
+        "INSERT OR IGNORE INTO visits (place_id, started_at, ended_at, method) VALUES (?1, ?2, ?3, ?4)",
+        params![place_id, cand.started_at, cand.ended_at, method],
+    )?;
+    Ok(conn.query_row(
+        "SELECT id FROM visits WHERE place_id = ?1 AND started_at = ?2",
+        params![place_id, cand.started_at],
+        |r| r.get(0),
+    )?)
+}
+
+pub fn assign_logs(conn: &Connection, visit_id: i64, log_ids: &[i64]) -> Result<()> {
+    let mut stmt = conn.prepare("UPDATE raw_logs SET visit_id = ?1 WHERE id = ?2")?;
+    for id in log_ids {
+        stmt.execute(params![visit_id, id])?;
+    }
+    Ok(())
+}
+
+pub fn rename_place(conn: &mut Connection, place_id: i64, new_name: &str) -> Result<i64> {
+    let new_name = new_name.trim();
+    if new_name.is_empty() {
+        return Err(Error::Invalid("place name must not be empty".into()));
+    }
+    let tx = conn.transaction()?;
+    let (old, lat, lon): (String, f64, f64) = tx
+        .query_row("SELECT name, lat, lon FROM places WHERE id = ?1", [place_id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
+        .optional()?
+        .ok_or_else(|| Error::Invalid(format!("place {place_id} not found")))?;
+    record_correction(&tx, lat, lon, &old, new_name)?;
+    let result = match find_place(&tx, new_name, lat, lon, Some(place_id))? {
+        Some(target) => {
+            tx.execute("UPDATE OR IGNORE visits SET place_id = ?1 WHERE place_id = ?2", params![target, place_id])?;
+            tx.execute("DELETE FROM places WHERE id = ?1", [place_id])?;
+            target
+        }
+        None => {
+            tx.execute("UPDATE places SET name = ?1 WHERE id = ?2", params![new_name, place_id])?;
+            place_id
+        }
+    };
+    tx.commit()?;
+    Ok(result)
+}
 
 pub fn upsert_raw_log(conn: &Connection, log: &RawLog) -> Result<()> {
     conn.execute(
