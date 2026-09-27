@@ -28,3 +28,9 @@ venv/
 
 # Logs
 *.log
+
+# Rust
+target/
+
+# Local DB
+*.db
