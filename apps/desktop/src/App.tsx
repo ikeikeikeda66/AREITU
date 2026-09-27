@@ -1,12 +1,26 @@
 import { useState } from "react";
 import { SearchListScreen } from "./screens/SearchListScreen";
+import { PlaceDetailScreen } from "./screens/PlaceDetailScreen";
+import type { Place } from "./api/types";
 
 export default function App() {
-  const [selectedPlaceId, setSelectedPlaceId] = useState<number | null>(null);
+  const [selectedPlace, setSelectedPlace] = useState<Place | null>(null);
 
-  if (selectedPlaceId === null) {
-    return <SearchListScreen onSelectPlace={setSelectedPlaceId} />;
+  if (selectedPlace === null) {
+    return (
+      <SearchListScreen
+        onSelectPlace={(id) => setSelectedPlace({ id, name: "", visitCount: 0, lastVisit: "" })}
+      />
+    );
   }
-  // PlaceDetailScreen は Task 9 で接続する
-  return <SearchListScreen onSelectPlace={setSelectedPlaceId} />;
+
+  return (
+    <PlaceDetailScreen
+      place={selectedPlace}
+      onBack={() => setSelectedPlace(null)}
+      onRenamed={(newPlaceId, newName) =>
+        setSelectedPlace({ ...selectedPlace, id: newPlaceId, name: newName })
+      }
+    />
+  );
 }
