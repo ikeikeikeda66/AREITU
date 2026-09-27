@@ -127,6 +127,8 @@ name = "areitu-desktop"
 version = "0.1.0"
 dependencies = [
  "areitu-core",
+ "chrono",
+ "rusqlite",
  "serde",
  "serde_json",
  "tauri",

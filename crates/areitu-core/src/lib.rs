@@ -10,6 +10,25 @@ pub mod resolve;
 pub mod scan;
 pub mod store;
 
+/// 外部クレート（Tauri バックエンドなど）のテストから `VisitCandidate` を組み立てるための
+/// 最小限の公開ヘルパー。本体ロジックは含まない。
+#[cfg(any(test, feature = "test-util"))]
+pub mod testutil_ext {
+    use crate::cluster::VisitCandidate;
+
+    pub fn candidate(hints: &[&str]) -> VisitCandidate {
+        let t = |s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M").unwrap();
+        VisitCandidate {
+            started_at: t("2026-09-01 12:00"),
+            ended_at: t("2026-09-01 12:45"),
+            lat: 35.0,
+            lon: 139.0,
+            log_ids: vec![],
+            hints: hints.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("database: {0}")]
