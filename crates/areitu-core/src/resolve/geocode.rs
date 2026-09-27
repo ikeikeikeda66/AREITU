@@ -103,6 +103,89 @@ impl ReverseGeocoder for Nominatim {
     }
 }
 
+const GOOGLE_PLACES_RADIUS_M: f64 = 50.0;
+
+pub fn google_places_request_body(lat: f64, lon: f64) -> serde_json::Value {
+    serde_json::json!({
+        "locationRestriction": {
+            "circle": {
+                "center": {"latitude": lat, "longitude": lon},
+                "radius": GOOGLE_PLACES_RADIUS_M,
+            }
+        },
+        "maxResultCount": 1,
+    })
+}
+
+pub fn parse_google_places_response(json: &str) -> Result<Option<PoiGuess>> {
+    #[derive(Deserialize)]
+    struct Response {
+        #[serde(default)]
+        places: Vec<Place>,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Place {
+        #[serde(default)]
+        display_name: Option<DisplayName>,
+        #[serde(default)]
+        formatted_address: Option<String>,
+        #[serde(default)]
+        types: Vec<String>,
+    }
+    #[derive(Deserialize)]
+    struct DisplayName {
+        text: String,
+    }
+    let resp: Response = serde_json::from_str(json)?;
+    let Some(place) = resp.places.into_iter().next() else {
+        return Ok(None);
+    };
+    let Some(display_name) = place.formatted_address else {
+        return Ok(None);
+    };
+    Ok(Some(PoiGuess {
+        name: place.display_name.map(|d| d.text),
+        display_name,
+        category: place.types.into_iter().next(),
+    }))
+}
+
+pub struct GooglePlaces {
+    client: reqwest::blocking::Client,
+    api_key: String,
+}
+
+impl GooglePlaces {
+    pub fn new(api_key: &str) -> Result<GooglePlaces> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|e| Error::Http(e.to_string()))?;
+        Ok(GooglePlaces { client, api_key: api_key.to_owned() })
+    }
+}
+
+impl ReverseGeocoder for GooglePlaces {
+    fn reverse(&self, lat: f64, lon: f64) -> Result<Option<PoiGuess>> {
+        let resp = self
+            .client
+            .post("https://places.googleapis.com/v1/places:searchNearby")
+            .header("X-Goog-Api-Key", &self.api_key)
+            .header(
+                "X-Goog-FieldMask",
+                "places.displayName,places.formattedAddress,places.types",
+            )
+            .json(&google_places_request_body(lat, lon))
+            .send()
+            .map_err(|e| Error::Http(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(Error::Http(format!("google places status {}", resp.status())));
+        }
+        parse_google_places_response(&resp.text().map_err(|e| Error::Http(e.to_string()))?)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,5 +227,31 @@ mod tests {
         let n = Nominatim::new("AREITU-test/0.1 (+https://github.com/ikeikeikeda66/AREITU)").unwrap();
         let g = n.reverse(35.681236, 139.767125).unwrap().unwrap();
         assert!(g.display_name.contains("千代田区"), "{}", g.display_name);
+    }
+
+    #[test]
+    fn google_places_request_body_has_circle_restriction() {
+        let body = google_places_request_body(35.6812, 139.7671);
+        assert_eq!(body["locationRestriction"]["circle"]["center"]["latitude"], 35.6812);
+        assert_eq!(body["maxResultCount"], 1);
+    }
+
+    #[test]
+    fn parses_named_place() {
+        let json = r#"{"places":[{"displayName":{"text":"ブルーボトルコーヒー","languageCode":"ja"},
+            "formattedAddress":"日本、東京都千代田区丸の内","types":["cafe","food"]}]}"#;
+        let g = parse_google_places_response(json).unwrap().unwrap();
+        assert_eq!(g.name.as_deref(), Some("ブルーボトルコーヒー"));
+        assert_eq!(g.category.as_deref(), Some("cafe"));
+    }
+
+    #[test]
+    fn empty_places_is_none() {
+        assert_eq!(parse_google_places_response(r#"{"places":[]}"#).unwrap(), None);
+    }
+
+    #[test]
+    fn google_places_broken_json_is_error() {
+        assert!(parse_google_places_response("<html>").is_err());
     }
 }
