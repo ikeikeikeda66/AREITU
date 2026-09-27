@@ -16,6 +16,8 @@ struct FilesListResponse {
 
 pub trait DriveApi {
     fn find_db_file(&self, access_token: &str, name: &str) -> crate::Result<Option<DriveFile>>;
+    fn upload_create(&self, access_token: &str, name: &str, content: &[u8]) -> crate::Result<DriveFile>;
+    fn upload_update(&self, access_token: &str, file_id: &str, content: &[u8]) -> crate::Result<DriveFile>;
 }
 
 pub struct DriveClient {
@@ -48,6 +50,67 @@ impl DriveClient {
     }
 }
 
+/// Builds a `multipart/related` body: a JSON metadata part followed by an
+/// `application/octet-stream` part carrying `content` verbatim. `boundary`
+/// must not occur anywhere in `metadata` or `content` (see `make_boundary`).
+pub fn build_multipart_related_body(boundary: &str, metadata: &serde_json::Value, content: &[u8]) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(format!("--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n").as_bytes());
+    body.extend_from_slice(metadata.to_string().as_bytes());
+    body.extend_from_slice(format!("\r\n--{boundary}\r\nContent-Type: application/octet-stream\r\n\r\n").as_bytes());
+    body.extend_from_slice(content);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    body
+}
+
+fn bytes_contain(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty() && haystack.windows(needle.len()).any(|window| window == needle)
+}
+
+/// Generates a random boundary token and verifies it cannot appear in the
+/// multipart body: neither in the JSON metadata nor in the raw binary
+/// content. Retries (astronomically unlikely) on collision.
+fn make_boundary(metadata: &serde_json::Value, content: &[u8]) -> String {
+    let metadata_bytes = metadata.to_string().into_bytes();
+    loop {
+        let random_bytes: [u8; 16] = std::array::from_fn(|_| rand::random::<u8>());
+        let candidate = format!(
+            "areitu-sync-boundary-{}",
+            random_bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        );
+        let candidate_bytes = candidate.as_bytes();
+        if !bytes_contain(&metadata_bytes, candidate_bytes) && !bytes_contain(content, candidate_bytes) {
+            return candidate;
+        }
+    }
+}
+
+impl DriveClient {
+    fn multipart_request(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+        access_token: &str,
+        metadata: &serde_json::Value,
+        content: &[u8],
+    ) -> crate::Result<DriveFile> {
+        let boundary = make_boundary(metadata, content);
+        let body = build_multipart_related_body(&boundary, metadata, content);
+        let resp = self
+            .client
+            .request(method, url)
+            .bearer_auth(access_token)
+            .header("Content-Type", format!("multipart/related; boundary={boundary}"))
+            .body(body)
+            .send()
+            .map_err(|e| crate::Error::Http(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(crate::Error::Http(format!("drive upload status {}", resp.status())));
+        }
+        resp.json().map_err(|e| crate::Error::Http(e.to_string()))
+    }
+}
+
 impl DriveApi for DriveClient {
     fn find_db_file(&self, access_token: &str, name: &str) -> crate::Result<Option<DriveFile>> {
         let resp = self
@@ -66,6 +129,18 @@ impl DriveApi for DriveClient {
         }
         let parsed: FilesListResponse = resp.json().map_err(|e| crate::Error::Http(e.to_string()))?;
         Ok(parsed.files.into_iter().next())
+    }
+
+    fn upload_create(&self, access_token: &str, name: &str, content: &[u8]) -> crate::Result<DriveFile> {
+        let metadata = serde_json::json!({"name": name, "parents": ["appDataFolder"]});
+        let url = format!("{}/drive/v3/files?uploadType=multipart", self.upload_base_url);
+        self.multipart_request(reqwest::Method::POST, &url, access_token, &metadata, content)
+    }
+
+    fn upload_update(&self, access_token: &str, file_id: &str, content: &[u8]) -> crate::Result<DriveFile> {
+        let metadata = serde_json::json!({});
+        let url = format!("{}/drive/v3/files/{file_id}?uploadType=multipart", self.upload_base_url);
+        self.multipart_request(reqwest::Method::PATCH, &url, access_token, &metadata, content)
     }
 }
 
@@ -109,5 +184,55 @@ mod find_db_file_tests {
         });
         let drive = DriveClient::new().unwrap().with_base_url(&server.base_url());
         assert!(drive.find_db_file("token", "areitu.db").is_err());
+    }
+}
+
+#[cfg(test)]
+mod upload_tests {
+    use super::*;
+    use httpmock::MockServer;
+
+    #[test]
+    fn multipart_body_contains_boundaries_metadata_and_content() {
+        let metadata = serde_json::json!({"name": "areitu.db", "parents": ["appDataFolder"]});
+        let body = build_multipart_related_body("BOUNDARY", &metadata, b"binary-db-bytes");
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.starts_with("--BOUNDARY\r\n"));
+        assert!(text.contains("Content-Type: application/json"));
+        assert!(text.contains("\"name\":\"areitu.db\""));
+        assert!(text.contains("Content-Type: application/octet-stream"));
+        assert!(text.contains("binary-db-bytes"));
+        assert!(text.ends_with("--BOUNDARY--\r\n"));
+    }
+
+    #[test]
+    fn upload_create_posts_to_upload_endpoint_with_parents() {
+        let server = MockServer::start();
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/upload/drive/v3/files")
+                .query_param("uploadType", "multipart")
+                .body_includes("appDataFolder");
+            then.status(200).json_body(serde_json::json!({"id": "new-file-1", "name": "areitu.db"}));
+        });
+        let drive = DriveClient::new().unwrap().with_upload_base_url(&format!("{}/upload", server.base_url()));
+        let created = drive.upload_create("token", "areitu.db", b"db-bytes").unwrap();
+        mock.assert();
+        assert_eq!(created.id, "new-file-1");
+    }
+
+    #[test]
+    fn upload_update_patches_existing_file_id() {
+        let server = MockServer::start();
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::PATCH)
+                .path("/upload/drive/v3/files/existing-file-1")
+                .query_param("uploadType", "multipart");
+            then.status(200).json_body(serde_json::json!({"id": "existing-file-1", "name": "areitu.db"}));
+        });
+        let drive = DriveClient::new().unwrap().with_upload_base_url(&format!("{}/upload", server.base_url()));
+        let updated = drive.upload_update("token", "existing-file-1", b"new-db-bytes").unwrap();
+        mock.assert();
+        assert_eq!(updated.id, "existing-file-1");
     }
 }
