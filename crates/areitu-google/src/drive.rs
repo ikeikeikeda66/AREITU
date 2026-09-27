@@ -18,6 +18,7 @@ pub trait DriveApi {
     fn find_db_file(&self, access_token: &str, name: &str) -> crate::Result<Option<DriveFile>>;
     fn upload_create(&self, access_token: &str, name: &str, content: &[u8]) -> crate::Result<DriveFile>;
     fn upload_update(&self, access_token: &str, file_id: &str, content: &[u8]) -> crate::Result<DriveFile>;
+    fn download(&self, access_token: &str, file_id: &str) -> crate::Result<Vec<u8>>;
 }
 
 pub struct DriveClient {
@@ -142,6 +143,20 @@ impl DriveApi for DriveClient {
         let url = format!("{}/drive/v3/files/{file_id}?uploadType=multipart", self.upload_base_url);
         self.multipart_request(reqwest::Method::PATCH, &url, access_token, &metadata, content)
     }
+
+    fn download(&self, access_token: &str, file_id: &str) -> crate::Result<Vec<u8>> {
+        let resp = self
+            .client
+            .get(format!("{}/drive/v3/files/{file_id}", self.base_url))
+            .bearer_auth(access_token)
+            .query(&[("alt", "media")])
+            .send()
+            .map_err(|e| crate::Error::Http(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(crate::Error::Http(format!("drive download status {}", resp.status())));
+        }
+        Ok(resp.bytes().map_err(|e| crate::Error::Http(e.to_string()))?.to_vec())
+    }
 }
 
 #[cfg(test)]
@@ -234,5 +249,37 @@ mod upload_tests {
         let updated = drive.upload_update("token", "existing-file-1", b"new-db-bytes").unwrap();
         mock.assert();
         assert_eq!(updated.id, "existing-file-1");
+    }
+}
+
+#[cfg(test)]
+mod download_tests {
+    use super::*;
+    use httpmock::MockServer;
+
+    #[test]
+    fn downloads_raw_bytes_with_alt_media() {
+        let server = MockServer::start();
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/drive/v3/files/remote-file-1")
+                .query_param("alt", "media");
+            then.status(200).body(b"sqlite-db-content");
+        });
+        let drive = DriveClient::new().unwrap().with_base_url(&server.base_url());
+        let bytes = drive.download("token", "remote-file-1").unwrap();
+        mock.assert();
+        assert_eq!(bytes, b"sqlite-db-content".to_vec());
+    }
+
+    #[test]
+    fn missing_file_is_an_error() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET).path("/drive/v3/files/missing");
+            then.status(404);
+        });
+        let drive = DriveClient::new().unwrap().with_base_url(&server.base_url());
+        assert!(drive.download("token", "missing").is_err());
     }
 }
