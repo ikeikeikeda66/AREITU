@@ -1,6 +1,8 @@
 pub mod calendar;
+pub mod cluster;
 pub mod db;
 pub mod exif;
+pub mod geo;
 pub mod model;
 pub mod scan;
 pub mod store;
