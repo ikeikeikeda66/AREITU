@@ -164,6 +164,74 @@ impl LlmClient for OpenAi {
     }
 }
 
+pub fn gemini_request_body(prompt: &str) -> serde_json::Value {
+    serde_json::json!({
+        "contents": [{"parts": [{"text": prompt}]}],
+    })
+}
+
+pub fn parse_gemini_response(json: &str) -> Result<String> {
+    #[derive(Deserialize)]
+    struct Response {
+        candidates: Vec<Candidate>,
+    }
+    #[derive(Deserialize)]
+    struct Candidate {
+        content: Content,
+    }
+    #[derive(Deserialize)]
+    struct Content {
+        parts: Vec<Part>,
+    }
+    #[derive(Deserialize)]
+    struct Part {
+        text: String,
+    }
+    let resp: Response = serde_json::from_str(json)?;
+    resp.candidates
+        .into_iter()
+        .next()
+        .and_then(|c| c.content.parts.into_iter().next())
+        .map(|p| p.text)
+        .ok_or_else(|| Error::Invalid("gemini: no candidates in response".into()))
+}
+
+pub struct Gemini {
+    client: reqwest::blocking::Client,
+    api_key: String,
+    model: String,
+}
+
+impl Gemini {
+    pub fn new(api_key: &str, model: &str) -> Result<Gemini> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .map_err(|e| Error::Http(e.to_string()))?;
+        Ok(Gemini { client, api_key: api_key.to_owned(), model: model.to_owned() })
+    }
+}
+
+impl LlmClient for Gemini {
+    fn complete_json(&self, prompt: &str) -> Result<String> {
+        let url = format!(
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
+            self.model
+        );
+        let resp = self
+            .client
+            .post(url)
+            .header("x-goog-api-key", &self.api_key)
+            .json(&gemini_request_body(prompt))
+            .send()
+            .map_err(|e| Error::Http(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(Error::Http(format!("gemini status {}", resp.status())));
+        }
+        parse_gemini_response(&resp.text().map_err(|e| Error::Http(e.to_string()))?)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,5 +298,24 @@ mod tests {
     fn rejects_empty_name_and_garbage() {
         assert_eq!(parse_answer(r#"{"name":"  ","confidence":0.9}"#), None);
         assert_eq!(parse_answer("わかりません"), None);
+    }
+
+    #[test]
+    fn gemini_request_body_wraps_prompt_as_text_part() {
+        let body = gemini_request_body("こんにちは");
+        assert_eq!(body["contents"][0]["parts"][0]["text"], "こんにちは");
+    }
+
+    #[test]
+    fn parses_gemini_generate_content_response() {
+        let json = r#"{"candidates":[{"content":{"parts":[{"text":"{\"name\":\"カフェ丸の内\",\"confidence\":0.9}"}]}}]}"#;
+        let content = parse_gemini_response(json).unwrap();
+        let answer = parse_answer(&content).unwrap();
+        assert_eq!(answer.name, "カフェ丸の内");
+    }
+
+    #[test]
+    fn gemini_response_without_candidates_is_error() {
+        assert!(parse_gemini_response(r#"{"candidates":[]}"#).is_err());
     }
 }
