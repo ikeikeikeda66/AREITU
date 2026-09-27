@@ -24,20 +24,11 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                 tauri::async_runtime::spawn_blocking(move || {
                     let state = app.state::<crate::AppState>();
                     let config = crate::config::load_config(&state.config_path);
-                    if let (Ok(geocoder), Ok(mut conn)) = (
-                        areitu_core::resolve::geocode::Nominatim::new(
-                            "AREITU-desktop-tray/0.1 (+https://github.com/ikeikeikeda66/AREITU)",
-                        ),
-                        state.conn.lock(),
-                    ) {
-                        let _ = crate::sync::run_sync(
-                            &mut conn,
-                            &config.watched_dirs,
-                            &geocoder,
-                            None,
-                            config.min_confidence,
-                        );
-                    };
+                    let _ = crate::sync::sync_on_own_connection(
+                        &state.db_path,
+                        &config,
+                        &crate::config::KeyringSecretStore,
+                    );
                 });
             }
             _ => {}

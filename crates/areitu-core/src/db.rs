@@ -57,6 +57,7 @@ pub fn open_in_memory() -> Result<Connection> {
 
 fn init(c: &Connection) -> Result<()> {
     c.pragma_update(None, "foreign_keys", true)?;
+    c.busy_timeout(std::time::Duration::from_secs(10))?;
     c.execute_batch(SCHEMA)?;
     Ok(())
 }
@@ -98,5 +99,14 @@ mod tests {
         let c = open_in_memory().unwrap();
         let on: i64 = c.query_row("PRAGMA foreign_keys", [], |r| r.get(0)).unwrap();
         assert_eq!(on, 1);
+    }
+
+    #[test]
+    fn busy_timeout_is_set_to_ten_seconds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("areitu.db");
+        let c = open(&path).unwrap();
+        let ms: i64 = c.query_row("PRAGMA busy_timeout", [], |r| r.get(0)).unwrap();
+        assert_eq!(ms, 10_000);
     }
 }

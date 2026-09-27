@@ -1,5 +1,5 @@
 mod commands;
-#[allow(dead_code)] // remaining items consumed starting in Task 11
+#[allow(dead_code)] // save_config / SecretStore::set,delete consumed by get_settings/save_settings, added in this same task's follow-up commit
 mod config;
 mod logic;
 mod sync;
@@ -18,6 +18,7 @@ fn greet(name: &str) -> String {
 pub struct AppState {
     pub conn: Mutex<rusqlite::Connection>,
     pub config_path: std::path::PathBuf,
+    pub db_path: std::path::PathBuf,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -34,8 +35,8 @@ pub fn run() {
                 .app_data_dir()
                 .expect("failed to resolve app data dir");
             std::fs::create_dir_all(&data_dir).expect("failed to create app data dir");
-            let conn = areitu_core::db::open(&data_dir.join("areitu.db"))
-                .expect("failed to open areitu.db");
+            let db_path = data_dir.join("areitu.db");
+            let conn = areitu_core::db::open(&db_path).expect("failed to open areitu.db");
 
             let config_dir = app
                 .path()
@@ -44,7 +45,7 @@ pub fn run() {
             std::fs::create_dir_all(&config_dir).expect("failed to create app config dir");
             let config_path = config_dir.join("config.json");
 
-            app.manage(AppState { conn: Mutex::new(conn), config_path });
+            app.manage(AppState { conn: Mutex::new(conn), config_path, db_path });
 
             crate::tray::setup_tray(app.handle())?;
             crate::sync::spawn_poll_thread(app.handle().clone());

@@ -7,6 +7,16 @@ use areitu_core::resolve::Resolver;
 use areitu_core::scan::scan_photos;
 use rusqlite::Connection;
 
+use areitu_core::resolve::geocode::{GooglePlaces, Nominatim};
+use areitu_core::resolve::llm::{Gemini, OpenAi, Ollama};
+use crate::config::{AppConfig, LlmProvider, SecretStore, GEMINI_KEY, GOOGLE_PLACES_KEY, OPENAI_KEY};
+
+const USER_AGENT: &str = concat!(
+    "AREITU-desktop/",
+    env!("CARGO_PKG_VERSION"),
+    " (+https://github.com/ikeikeikeda66/AREITU)"
+);
+
 #[derive(Debug, Default, Clone, PartialEq, serde::Serialize)]
 pub struct SyncSummary {
     pub scanned: usize,
@@ -36,6 +46,64 @@ pub fn run_sync(
     Ok(summary)
 }
 
+pub fn build_geocoder(config: &AppConfig, secrets: &dyn SecretStore) -> Box<dyn ReverseGeocoder> {
+    if config.google_places_enabled {
+        if let Some(key) = secrets.get(GOOGLE_PLACES_KEY) {
+            if let Ok(g) = GooglePlaces::new(&key) {
+                return Box::new(g);
+            }
+        }
+    }
+    Box::new(Nominatim::new(USER_AGENT).expect("building a Nominatim client never fails"))
+}
+
+pub fn build_llm(config: &AppConfig, secrets: &dyn SecretStore) -> Option<Box<dyn LlmClient>> {
+    match config.llm_provider {
+        LlmProvider::None => None,
+        LlmProvider::Ollama => {
+            if config.ollama_model.trim().is_empty() {
+                return None;
+            }
+            Ollama::new(&config.ollama_url, &config.ollama_model)
+                .ok()
+                .map(|c| Box::new(c) as Box<dyn LlmClient>)
+        }
+        LlmProvider::OpenAi => secrets
+            .get(OPENAI_KEY)
+            .and_then(|key| OpenAi::new(&key, &config.openai_model).ok())
+            .map(|c| Box::new(c) as Box<dyn LlmClient>),
+        LlmProvider::Gemini => secrets
+            .get(GEMINI_KEY)
+            .and_then(|key| Gemini::new(&key, &config.gemini_model).ok())
+            .map(|c| Box::new(c) as Box<dyn LlmClient>),
+    }
+}
+
+pub fn run_sync_with_config(
+    conn: &mut Connection,
+    config: &AppConfig,
+    secrets: &dyn SecretStore,
+) -> Result<SyncSummary, String> {
+    let geocoder = build_geocoder(config, secrets);
+    let llm = build_llm(config, secrets);
+    run_sync(conn, &config.watched_dirs, geocoder.as_ref(), llm.as_deref(), config.min_confidence)
+}
+
+/// バックグラウンド同期（ポーリングスレッド・トレイの「今すぐ同期」・sync_now コマンド）は
+/// 必ずこの関数を通す。`AppState.conn` を保持したまま長時間のネットワーク呼び出しを行うと、
+/// その間 list_places / visits_of / rename_place などの UI コマンドがブロックしてしまうため、
+/// 同期専用に自分だけの Connection を新しく開いて実行する。
+/// 書き込みは短命なトランザクション単位で行われ、`db::init` で設定した busy_timeout により
+/// 同じ DB ファイルへの別接続とは待ち合わせで解決する。
+pub fn sync_on_own_connection(
+    db_path: &Path,
+    config: &AppConfig,
+    secrets: &dyn SecretStore,
+) -> Result<SyncSummary, String> {
+    let mut conn = areitu_core::db::open(db_path).map_err(|e| e.to_string())?;
+    run_sync_with_config(&mut conn, config, secrets)
+}
+
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
@@ -56,15 +124,7 @@ pub fn spawn_poll_thread(app: AppHandle) {
             }
             elapsed = Duration::ZERO;
 
-            let geocoder = match areitu_core::resolve::geocode::Nominatim::new(
-                "AREITU-desktop-poll/0.1 (+https://github.com/ikeikeikeda66/AREITU)",
-            ) {
-                Ok(g) => g,
-                Err(_) => continue,
-            };
-            if let Ok(mut conn) = state.conn.lock() {
-                let _ = run_sync(&mut conn, &config.watched_dirs, &geocoder, None, config.min_confidence);
-            };
+            let _ = sync_on_own_connection(&state.db_path, &config, &crate::config::KeyringSecretStore);
         }
     });
 }
@@ -129,6 +189,61 @@ mod tests {
         let summary = run_sync(&mut c, &[], &g, None, 0.6).unwrap();
         assert_eq!(summary.scanned, 0);
         assert_eq!(summary.visits_created, 1);
+    }
+
+    use crate::config::{FakeSecretStore, LlmProvider, OPENAI_KEY};
+
+    #[test]
+    fn openai_provider_without_api_key_degrades_to_nominatim_only() {
+        let mut c = open_in_memory().unwrap();
+        // キーは設定しない
+        let config = AppConfig { llm_provider: LlmProvider::OpenAi, ..AppConfig::default() };
+        let secrets = FakeSecretStore::new();
+        // ネットワークに出る前提のテストは避け、build_llm が None を返すことだけを確認する
+        assert!(build_llm(&config, &secrets).is_none());
+        let summary = run_sync_with_config(&mut c, &config, &secrets);
+        assert!(summary.is_ok());
+    }
+
+    #[test]
+    fn openai_provider_with_api_key_builds_a_client() {
+        let config = AppConfig {
+            llm_provider: LlmProvider::OpenAi,
+            openai_model: "gpt-4o-mini".to_owned(),
+            ..AppConfig::default()
+        };
+        let secrets = FakeSecretStore::new();
+        secrets.set(OPENAI_KEY, "sk-test").unwrap();
+        assert!(build_llm(&config, &secrets).is_some());
+    }
+
+    #[test]
+    fn ollama_provider_with_blank_model_degrades_to_none() {
+        let config = AppConfig {
+            llm_provider: LlmProvider::Ollama,
+            ollama_model: String::new(),
+            ..AppConfig::default()
+        };
+        let secrets = FakeSecretStore::new();
+        assert!(build_llm(&config, &secrets).is_none());
+    }
+
+    #[test]
+    fn sync_on_own_connection_does_not_need_the_shared_lock() {
+        use std::sync::{Arc, Mutex};
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("areitu.db");
+        // AppState が保持するのと同じ DB ファイルへの共有接続を用意し、
+        // テストスレッドでロックを握ったまま sync_on_own_connection を呼ぶ。
+        let shared = Arc::new(Mutex::new(areitu_core::db::open(&db_path).unwrap()));
+        let _guard = shared.lock().unwrap();
+
+        let config = AppConfig::default(); // watched_dirs は空
+        let secrets = crate::config::FakeSecretStore::new();
+        let summary = sync_on_own_connection(&db_path, &config, &secrets);
+
+        assert!(summary.is_ok());
     }
 
     #[test]
