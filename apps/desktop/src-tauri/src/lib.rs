@@ -3,6 +3,7 @@ mod commands;
 mod config;
 mod logic;
 mod sync;
+mod tray;
 
 use std::sync::Mutex;
 
@@ -23,6 +24,10 @@ pub struct AppState {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             let data_dir = app
                 .path()
@@ -40,6 +45,9 @@ pub fn run() {
             let config_path = config_dir.join("config.json");
 
             app.manage(AppState { conn: Mutex::new(conn), config_path });
+
+            crate::tray::setup_tray(app.handle())?;
+            crate::sync::spawn_poll_thread(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

@@ -19,7 +19,13 @@
     ],
     "security": {
       "csp": null
+    },
+    "trayIcon": {
+      "iconPath": "icons/icon.png"
     }
+  },
+  "plugins": {
+    "autostart": {}
   },
   "bundle": {
     "active": true,

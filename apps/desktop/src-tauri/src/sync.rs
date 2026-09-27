@@ -36,6 +36,39 @@ pub fn run_sync(
     Ok(summary)
 }
 
+use std::time::Duration;
+use tauri::{AppHandle, Manager};
+
+const POLL_CHECK_INTERVAL: Duration = Duration::from_secs(30);
+
+pub fn spawn_poll_thread(app: AppHandle) {
+    std::thread::spawn(move || {
+        let mut elapsed = Duration::ZERO;
+        loop {
+            std::thread::sleep(POLL_CHECK_INTERVAL);
+            elapsed += POLL_CHECK_INTERVAL;
+
+            let state = app.state::<crate::AppState>();
+            let config = crate::config::load_config(&state.config_path);
+            let target = Duration::from_secs(u64::from(config.poll_interval_minutes.max(1)) * 60);
+            if elapsed < target {
+                continue;
+            }
+            elapsed = Duration::ZERO;
+
+            let geocoder = match areitu_core::resolve::geocode::Nominatim::new(
+                "AREITU-desktop-poll/0.1 (+https://github.com/ikeikeikeda66/AREITU)",
+            ) {
+                Ok(g) => g,
+                Err(_) => continue,
+            };
+            if let Ok(mut conn) = state.conn.lock() {
+                let _ = run_sync(&mut conn, &config.watched_dirs, &geocoder, None, config.min_confidence);
+            };
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
