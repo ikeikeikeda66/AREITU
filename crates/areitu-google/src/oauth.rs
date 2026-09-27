@@ -87,6 +87,175 @@ mod authorize_url_tests {
     }
 }
 
+use std::time::Duration;
+
+pub struct TokenClient {
+    client: reqwest::blocking::Client,
+    base_url: String,
+}
+
+#[derive(Clone, serde::Deserialize)]
+pub struct TokenResponse {
+    pub access_token: String,
+    pub expires_in: i64,
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+    pub scope: String,
+    pub token_type: String,
+}
+
+impl std::fmt::Debug for TokenResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenResponse")
+            .field("access_token", &"<redacted>")
+            .field("refresh_token", &self.refresh_token.as_ref().map(|_| "<redacted>"))
+            .field("expires_in", &self.expires_in)
+            .field("scope", &self.scope)
+            .field("token_type", &self.token_type)
+            .finish()
+    }
+}
+
+impl TokenClient {
+    pub fn new() -> crate::Result<TokenClient> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|e| crate::Error::Http(e.to_string()))?;
+        Ok(TokenClient { client, base_url: "https://oauth2.googleapis.com".to_owned() })
+    }
+
+    pub fn with_base_url(mut self, url: &str) -> Self {
+        self.base_url = url.trim_end_matches('/').to_owned();
+        self
+    }
+
+    pub fn exchange_code(
+        &self,
+        client_id: &str,
+        client_secret: &str,
+        code: &str,
+        redirect_uri: &str,
+        code_verifier: &str,
+    ) -> crate::Result<TokenResponse> {
+        self.post_token(&[
+            ("grant_type", "authorization_code"),
+            ("client_id", client_id),
+            ("client_secret", client_secret),
+            ("code", code),
+            ("redirect_uri", redirect_uri),
+            ("code_verifier", code_verifier),
+        ])
+    }
+
+    pub fn refresh(&self, client_id: &str, client_secret: &str, refresh_token: &str) -> crate::Result<TokenResponse> {
+        self.post_token(&[
+            ("grant_type", "refresh_token"),
+            ("client_id", client_id),
+            ("client_secret", client_secret),
+            ("refresh_token", refresh_token),
+        ])
+    }
+
+    fn post_token(&self, form: &[(&str, &str)]) -> crate::Result<TokenResponse> {
+        let resp = self
+            .client
+            .post(format!("{}/token", self.base_url))
+            .form(form)
+            .send()
+            .map_err(|e| crate::Error::Http(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(crate::Error::Http(format!("token endpoint status {}", resp.status())));
+        }
+        resp.json().map_err(|e| crate::Error::Http(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod token_client_tests {
+    use super::*;
+    use httpmock::MockServer;
+
+    #[test]
+    fn exchange_code_parses_token_response() {
+        let server = MockServer::start();
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/token")
+                .body_includes("grant_type=authorization_code")
+                .body_includes("code_verifier=verifier-1");
+            then.status(200).json_body(serde_json::json!({
+                "access_token": "access-1",
+                "expires_in": 3600,
+                "refresh_token": "refresh-1",
+                "scope": crate::SCOPE_DRIVE_APPDATA,
+                "token_type": "Bearer"
+            }));
+        });
+        let client = TokenClient::new().unwrap().with_base_url(&server.base_url());
+        let token = client
+            .exchange_code("client-id", "client-secret", "auth-code", "http://127.0.0.1:1/callback", "verifier-1")
+            .unwrap();
+        mock.assert();
+        assert_eq!(token.access_token, "access-1");
+        assert_eq!(token.refresh_token.as_deref(), Some("refresh-1"));
+    }
+
+    #[test]
+    fn refresh_uses_refresh_token_grant() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(httpmock::Method::POST).path("/token").body_includes("grant_type=refresh_token");
+            then.status(200).json_body(serde_json::json!({
+                "access_token": "access-2",
+                "expires_in": 3600,
+                "scope": crate::SCOPE_DRIVE_APPDATA,
+                "token_type": "Bearer"
+            }));
+        });
+        let client = TokenClient::new().unwrap().with_base_url(&server.base_url());
+        let token = client.refresh("client-id", "client-secret", "refresh-1").unwrap();
+        assert_eq!(token.access_token, "access-2");
+        assert_eq!(token.refresh_token, None);
+    }
+
+    #[test]
+    fn revoked_refresh_token_is_an_error() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(httpmock::Method::POST).path("/token");
+            then.status(400).json_body(serde_json::json!({"error": "invalid_grant"}));
+        });
+        let client = TokenClient::new().unwrap().with_base_url(&server.base_url());
+        let err = client.refresh("client-id", "client-secret", "revoked").unwrap_err();
+        assert!(matches!(err, crate::Error::Http(_)));
+    }
+
+    #[test]
+    fn debug_output_never_contains_raw_tokens() {
+        let token = TokenResponse {
+            access_token: "super-secret-access".to_owned(),
+            expires_in: 10,
+            refresh_token: Some("super-secret-refresh".to_owned()),
+            scope: "s".to_owned(),
+            token_type: "Bearer".to_owned(),
+        };
+        let printed = format!("{token:?}");
+        assert!(!printed.contains("super-secret-access"));
+        assert!(!printed.contains("super-secret-refresh"));
+    }
+
+    #[test]
+    #[ignore = "hits the real Google OAuth token endpoint"]
+    fn live_refresh_with_real_credentials() {
+        let creds = crate::auth::client_credentials_from_env().unwrap();
+        let refresh_token = std::env::var("AREITU_TEST_GOOGLE_REFRESH_TOKEN").unwrap();
+        let client = TokenClient::new().unwrap();
+        let token = client.refresh(&creds.client_id, &creds.client_secret, &refresh_token).unwrap();
+        assert!(!token.access_token.is_empty());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
