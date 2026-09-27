@@ -1,7 +1,8 @@
 mod commands;
-#[allow(dead_code)] // consumed starting in Task 4
+#[allow(dead_code)] // remaining items consumed starting in Task 11
 mod config;
 mod logic;
+mod sync;
 
 use std::sync::Mutex;
 
@@ -46,6 +47,7 @@ pub fn run() {
             commands::list_places,
             commands::visits_of,
             commands::rename_place,
+            commands::sync_now,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
