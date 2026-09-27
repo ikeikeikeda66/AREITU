@@ -1,3 +1,4 @@
+pub mod calendar;
 pub mod db;
 pub mod exif;
 pub mod model;
