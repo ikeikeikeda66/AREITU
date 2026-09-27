@@ -1,4 +1,6 @@
 pub mod db;
+pub mod model;
+pub mod store;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
