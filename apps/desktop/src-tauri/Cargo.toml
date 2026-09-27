@@ -25,6 +25,7 @@ serde_json = "1"
 areitu-core = { version = "0.1.0", path = "../../../crates/areitu-core", features = ["test-util"] }
 chrono = "0.4.45"
 rusqlite = { version = "0.40.2", features = ["bundled", "chrono"] }
+keyring = "4.2.0"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
@@ -34,3 +35,6 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+[dev-dependencies]
+tempfile = "3.27.0"

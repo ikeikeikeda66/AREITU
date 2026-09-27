@@ -1,4 +1,6 @@
 mod commands;
+#[allow(dead_code)] // consumed starting in Task 4
+mod config;
 mod logic;
 
 use std::sync::Mutex;
