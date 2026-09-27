@@ -103,10 +103,99 @@ impl LlmClient for Ollama {
     }
 }
 
+pub fn openai_request_body(model: &str, prompt: &str) -> serde_json::Value {
+    serde_json::json!({
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "response_format": {"type": "json_object"},
+    })
+}
+
+pub fn parse_openai_response(json: &str) -> Result<String> {
+    #[derive(Deserialize)]
+    struct Response {
+        choices: Vec<Choice>,
+    }
+    #[derive(Deserialize)]
+    struct Choice {
+        message: Message,
+    }
+    #[derive(Deserialize)]
+    struct Message {
+        content: String,
+    }
+    let resp: Response = serde_json::from_str(json)?;
+    resp.choices
+        .into_iter()
+        .next()
+        .map(|c| c.message.content)
+        .ok_or_else(|| Error::Invalid("openai: no choices in response".into()))
+}
+
+pub struct OpenAi {
+    client: reqwest::blocking::Client,
+    api_key: String,
+    model: String,
+}
+
+impl OpenAi {
+    pub fn new(api_key: &str, model: &str) -> Result<OpenAi> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .map_err(|e| Error::Http(e.to_string()))?;
+        Ok(OpenAi { client, api_key: api_key.to_owned(), model: model.to_owned() })
+    }
+}
+
+impl LlmClient for OpenAi {
+    fn complete_json(&self, prompt: &str) -> Result<String> {
+        let resp = self
+            .client
+            .post("https://api.openai.com/v1/chat/completions")
+            .bearer_auth(&self.api_key)
+            .json(&openai_request_body(&self.model, prompt))
+            .send()
+            .map_err(|e| Error::Http(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(Error::Http(format!("openai status {}", resp.status())));
+        }
+        parse_openai_response(&resp.text().map_err(|e| Error::Http(e.to_string()))?)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::testutil::candidate;
+
+    #[test]
+    fn openai_request_body_has_json_response_format() {
+        let body = openai_request_body("gpt-4o-mini", "こんにちは");
+        assert_eq!(body["model"], "gpt-4o-mini");
+        assert_eq!(body["messages"][0]["role"], "user");
+        assert_eq!(body["messages"][0]["content"], "こんにちは");
+        assert_eq!(body["response_format"]["type"], "json_object");
+    }
+
+    #[test]
+    fn parses_openai_chat_completion_response() {
+        let json = r#"{"choices":[{"message":{"content":"{\"name\":\"カフェ丸の内\",\"confidence\":0.9}"}}]}"#;
+        let content = parse_openai_response(json).unwrap();
+        let answer = parse_answer(&content).unwrap();
+        assert_eq!(answer.name, "カフェ丸の内");
+        assert_eq!(answer.confidence, 0.9);
+    }
+
+    #[test]
+    fn openai_response_without_choices_is_error() {
+        assert!(parse_openai_response(r#"{"choices":[]}"#).is_err());
+    }
+
+    #[test]
+    fn openai_response_broken_json_is_error() {
+        assert!(parse_openai_response("not json").is_err());
+    }
 
     #[test]
     fn prompt_contains_time_coords_poi_and_hints() {
