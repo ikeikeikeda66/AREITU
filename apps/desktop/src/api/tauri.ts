@@ -54,3 +54,8 @@ export async function driveSyncNow(): Promise<DriveSyncOutcome> {
 export async function setupCompleted(): Promise<boolean> {
   return invoke<boolean>("setup_completed");
 }
+
+/** ユーザーがダイアログで選んだ Timeline エクスポートのパスを取り込み、取り込んだ件数を返す。 */
+export async function importTimelineFile(path: string): Promise<number> {
+  return invoke<number>("import_timeline_file", { path });
+}

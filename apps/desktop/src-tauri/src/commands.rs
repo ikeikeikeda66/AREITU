@@ -131,6 +131,12 @@ pub fn setup_completed(state: State<AppState>) -> bool {
     config_exists(&state.config_path)
 }
 
+#[tauri::command]
+pub fn import_timeline_file(state: State<AppState>, path: String) -> Result<usize, String> {
+    let conn = state.conn.lock().map_err(|_| "db lock poisoned".to_string())?;
+    areitu_core::timeline::ingest_timeline_file(&conn, std::path::Path::new(&path)).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,5 +211,16 @@ mod tests {
     fn setup_completed_reflects_whether_config_file_exists() {
         let dir = tempfile::tempdir().unwrap();
         assert!(!crate::config::config_exists(&dir.path().join("config.json")));
+    }
+
+    #[test]
+    fn import_timeline_file_delegates_to_the_core_ingest_function() {
+        // コマンドは AppState.conn のロックと ingest_timeline_file への委譲のみ。
+        // パースは areitu-core の timeline::tests で検証済みなので、ここでは
+        // 委譲先のシグネチャが変わっていないことだけを型で確認する。
+        fn _assert_signature(f: fn(&rusqlite::Connection, &std::path::Path) -> areitu_core::Result<usize>) {
+            let _ = f;
+        }
+        _assert_signature(areitu_core::timeline::ingest_timeline_file);
     }
 }

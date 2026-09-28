@@ -68,6 +68,7 @@ pub fn run() {
             commands::get_settings,
             commands::save_settings,
             commands::setup_completed,
+            commands::import_timeline_file,
             google::google_sign_in,
             google::google_sign_out,
             google::google_status,

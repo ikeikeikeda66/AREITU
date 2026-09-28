@@ -3,6 +3,7 @@ import * as core from "@tauri-apps/api/core";
 import {
   driveSyncNow,
   getSettings,
+  importTimelineFile,
   googleSignIn,
   googleSignOut,
   googleStatus,
@@ -49,6 +50,12 @@ describe("tauri api layer", () => {
     const spy = vi.spyOn(core, "invoke").mockResolvedValue(true);
     await expect(setupCompleted()).resolves.toBe(true);
     expect(spy).toHaveBeenCalledWith("setup_completed");
+  });
+
+  it("importTimelineFile invokes import_timeline_file with the chosen path", async () => {
+    const spy = vi.spyOn(core, "invoke").mockResolvedValue(7);
+    await expect(importTimelineFile("/tmp/Timeline.json")).resolves.toBe(7);
+    expect(spy).toHaveBeenCalledWith("import_timeline_file", { path: "/tmp/Timeline.json" });
   });
 
   it("getSettings invokes get_settings with no arguments", async () => {
