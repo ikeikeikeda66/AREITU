@@ -49,12 +49,11 @@ pub fn run_sync(
 }
 
 pub fn build_geocoder(config: &AppConfig, secrets: &dyn SecretStore) -> Box<dyn ReverseGeocoder> {
-    if config.google_places_enabled {
-        if let Some(key) = secrets.get(GOOGLE_PLACES_KEY) {
-            if let Ok(g) = GooglePlaces::new(&key) {
-                return Box::new(g);
-            }
-        }
+    if config.google_places_enabled
+        && let Some(key) = secrets.get(GOOGLE_PLACES_KEY)
+        && let Ok(g) = GooglePlaces::new(&key)
+    {
+        return Box::new(g);
     }
     Box::new(Nominatim::new(USER_AGENT).expect("building a Nominatim client never fails"))
 }
@@ -147,12 +146,11 @@ pub fn spawn_poll_thread(app: AppHandle) {
                 &crate::config::KeyringSecretStore,
             );
 
-            if let Ok((db_path, state_path)) = crate::google::sync_paths(&app) {
-                if let Err(e) =
+            if let Ok((db_path, state_path)) = crate::google::sync_paths(&app)
+                && let Err(e) =
                     crate::google::drive_sync_locked(&state.sync_lock, &state.conn, &db_path, &state_path)
-                {
-                    eprintln!("drive sync skipped this cycle: {e}");
-                }
+            {
+                eprintln!("drive sync skipped this cycle: {e}");
             }
         }
     });

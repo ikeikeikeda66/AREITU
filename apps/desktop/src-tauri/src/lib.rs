@@ -9,12 +9,6 @@ use std::sync::Mutex;
 
 use tauri::Manager;
 
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
-
 pub struct AppState {
     pub conn: Mutex<rusqlite::Connection>,
     pub config_path: std::path::PathBuf,
@@ -64,7 +58,6 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            greet,
             commands::list_places,
             commands::visits_of,
             commands::rename_place,
