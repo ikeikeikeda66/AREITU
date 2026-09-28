@@ -88,9 +88,9 @@ pub fn get_settings(state: State<AppState>) -> SettingsDto {
         google_places_enabled: config.google_places_enabled,
         min_confidence: config.min_confidence,
         poll_interval_minutes: config.poll_interval_minutes,
-        has_openai_key: secrets.get(OPENAI_KEY).is_some(),
-        has_gemini_key: secrets.get(GEMINI_KEY).is_some(),
-        has_google_places_key: secrets.get(GOOGLE_PLACES_KEY).is_some(),
+        has_openai_key: matches!(secrets.get(OPENAI_KEY), Ok(Some(_))),
+        has_gemini_key: matches!(secrets.get(GEMINI_KEY), Ok(Some(_))),
+        has_google_places_key: matches!(secrets.get(GOOGLE_PLACES_KEY), Ok(Some(_))),
     }
 }
 
@@ -104,6 +104,8 @@ fn apply_secret(secrets: &dyn SecretStore, key: &str, value: Option<String>) -> 
 
 #[tauri::command]
 pub fn save_settings(state: State<AppState>, settings: SaveSettingsDto) -> Result<(), String> {
+    // calendar_enabled はこの DTO に含まれないため、既存の設定値を保持する。
+    let existing = load_config(&state.config_path);
     let config = AppConfig {
         watched_dirs: settings.watched_dirs,
         llm_provider: settings.llm_provider,
@@ -114,6 +116,7 @@ pub fn save_settings(state: State<AppState>, settings: SaveSettingsDto) -> Resul
         google_places_enabled: settings.google_places_enabled,
         min_confidence: settings.min_confidence,
         poll_interval_minutes: settings.poll_interval_minutes,
+        calendar_enabled: existing.calendar_enabled,
     };
     let secrets = KeyringSecretStore;
     apply_secret(&secrets, OPENAI_KEY, settings.openai_api_key)?;

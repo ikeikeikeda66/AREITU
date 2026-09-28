@@ -22,6 +22,7 @@ pub struct AppConfig {
     pub google_places_enabled: bool,
     pub min_confidence: f64,
     pub poll_interval_minutes: u32,
+    pub calendar_enabled: bool,
 }
 
 impl Default for AppConfig {
@@ -36,6 +37,7 @@ impl Default for AppConfig {
             google_places_enabled: false,
             min_confidence: 0.6,
             poll_interval_minutes: 30,
+            calendar_enabled: false,
         }
     }
 }
@@ -52,22 +54,52 @@ pub fn save_config(path: &Path, config: &AppConfig) -> std::io::Result<()> {
     std::fs::write(path, json)
 }
 
+// Task 9（初回起動オンボーディング）で使用される。
+#[allow(dead_code)]
+pub fn config_exists(path: &Path) -> bool {
+    path.exists()
+}
+
 pub const OPENAI_KEY: &str = "openai_api_key";
 pub const GEMINI_KEY: &str = "gemini_api_key";
 pub const GOOGLE_PLACES_KEY: &str = "google_places_api_key";
 const SERVICE: &str = "AREITU";
 
 pub trait SecretStore {
-    fn get(&self, key: &str) -> Option<String>;
+    fn get(&self, key: &str) -> Result<Option<String>, String>;
     fn set(&self, key: &str, value: &str) -> Result<(), String>;
     fn delete(&self, key: &str) -> Result<(), String>;
+}
+
+// Task 10（設定画面のキー状態表示）で使用される。
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyStatus {
+    Set,
+    NotSet,
+    Unavailable,
+}
+
+#[allow(dead_code)]
+pub fn key_status(secrets: &dyn SecretStore, key: &str) -> KeyStatus {
+    match secrets.get(key) {
+        Ok(Some(_)) => KeyStatus::Set,
+        Ok(None) => KeyStatus::NotSet,
+        Err(_) => KeyStatus::Unavailable,
+    }
 }
 
 pub struct KeyringSecretStore;
 
 impl SecretStore for KeyringSecretStore {
-    fn get(&self, key: &str) -> Option<String> {
-        keyring::Entry::new(SERVICE, key).ok()?.get_password().ok()
+    fn get(&self, key: &str) -> Result<Option<String>, String> {
+        let entry = keyring::Entry::new(SERVICE, key).map_err(|e| e.to_string())?;
+        match entry.get_password() {
+            Ok(pw) => Ok(Some(pw)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
     }
 
     fn set(&self, key: &str, value: &str) -> Result<(), String> {
@@ -100,8 +132,8 @@ impl FakeSecretStore {
 
 #[cfg(test)]
 impl SecretStore for FakeSecretStore {
-    fn get(&self, key: &str) -> Option<String> {
-        self.0.lock().unwrap().get(key).cloned()
+    fn get(&self, key: &str) -> Result<Option<String>, String> {
+        Ok(self.0.lock().unwrap().get(key).cloned())
     }
 
     fn set(&self, key: &str, value: &str) -> Result<(), String> {
@@ -112,6 +144,25 @@ impl SecretStore for FakeSecretStore {
     fn delete(&self, key: &str) -> Result<(), String> {
         self.0.lock().unwrap().remove(key);
         Ok(())
+    }
+}
+
+/// キーチェーンがロック中・アクセス不可の状態を模す test-only 実装。
+#[cfg(test)]
+pub struct AlwaysUnavailableSecretStore;
+
+#[cfg(test)]
+impl SecretStore for AlwaysUnavailableSecretStore {
+    fn get(&self, _key: &str) -> Result<Option<String>, String> {
+        Err("keychain is locked".to_owned())
+    }
+
+    fn set(&self, _key: &str, _value: &str) -> Result<(), String> {
+        Err("keychain is locked".to_owned())
+    }
+
+    fn delete(&self, _key: &str) -> Result<(), String> {
+        Err("keychain is locked".to_owned())
     }
 }
 
@@ -157,10 +208,43 @@ mod tests {
     #[test]
     fn fake_secret_store_set_get_delete() {
         let store = FakeSecretStore::new();
-        assert_eq!(store.get(OPENAI_KEY), None);
+        assert_eq!(store.get(OPENAI_KEY).unwrap(), None);
         store.set(OPENAI_KEY, "sk-test").unwrap();
-        assert_eq!(store.get(OPENAI_KEY).as_deref(), Some("sk-test"));
+        assert_eq!(store.get(OPENAI_KEY).unwrap().as_deref(), Some("sk-test"));
         store.delete(OPENAI_KEY).unwrap();
-        assert_eq!(store.get(OPENAI_KEY), None);
+        assert_eq!(store.get(OPENAI_KEY).unwrap(), None);
+    }
+
+    #[test]
+    fn calendar_enabled_defaults_to_false() {
+        assert!(!AppConfig::default().calendar_enabled);
+    }
+
+    #[test]
+    fn calendar_enabled_round_trips_through_save_and_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let config = AppConfig { calendar_enabled: true, ..AppConfig::default() };
+        save_config(&path, &config).unwrap();
+        assert!(load_config(&path).calendar_enabled);
+    }
+
+    #[test]
+    fn fake_secret_store_get_distinguishes_not_set_from_unavailable() {
+        let store = FakeSecretStore::new();
+        assert_eq!(store.get(OPENAI_KEY).unwrap(), None);
+        store.set(OPENAI_KEY, "sk-test").unwrap();
+        assert_eq!(store.get(OPENAI_KEY).unwrap().as_deref(), Some("sk-test"));
+        let locked = AlwaysUnavailableSecretStore;
+        assert!(locked.get(OPENAI_KEY).is_err());
+    }
+
+    #[test]
+    fn config_exists_reflects_whether_the_file_has_been_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        assert!(!config_exists(&path));
+        save_config(&path, &AppConfig::default()).unwrap();
+        assert!(config_exists(&path));
     }
 }

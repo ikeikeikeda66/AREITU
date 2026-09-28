@@ -50,7 +50,7 @@ pub fn run_sync(
 
 pub fn build_geocoder(config: &AppConfig, secrets: &dyn SecretStore) -> Box<dyn ReverseGeocoder> {
     if config.google_places_enabled
-        && let Some(key) = secrets.get(GOOGLE_PLACES_KEY)
+        && let Ok(Some(key)) = secrets.get(GOOGLE_PLACES_KEY)
         && let Ok(g) = GooglePlaces::new(&key)
     {
         return Box::new(g);
@@ -71,10 +71,14 @@ pub fn build_llm(config: &AppConfig, secrets: &dyn SecretStore) -> Option<Box<dy
         }
         LlmProvider::OpenAi => secrets
             .get(OPENAI_KEY)
+            .ok()
+            .flatten()
             .and_then(|key| OpenAi::new(&key, &config.openai_model).ok())
             .map(|c| Box::new(c) as Box<dyn LlmClient>),
         LlmProvider::Gemini => secrets
             .get(GEMINI_KEY)
+            .ok()
+            .flatten()
             .and_then(|key| Gemini::new(&key, &config.gemini_model).ok())
             .map(|c| Box::new(c) as Box<dyn LlmClient>),
     }
