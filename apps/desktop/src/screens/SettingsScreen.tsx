@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { getSettings, saveSettings } from "../api/tauri";
-import type { KeyStatus, LlmProvider, Settings } from "../api/types";
+import { driveSyncNow, getSettings, googleSignIn, googleSignOut, googleStatus, saveSettings } from "../api/tauri";
+import type { GoogleStatus, KeyStatus, LlmProvider, Settings } from "../api/types";
 
 function keyStatusLabel(status: KeyStatus): string {
   switch (status) {
@@ -40,9 +40,14 @@ export function SettingsScreen({ onBack }: Props) {
   const [geminiKeyInput, setGeminiKeyInput] = useState("");
   const [placesKeyInput, setPlacesKeyInput] = useState("");
   const [status, setStatus] = useState<string | null>(null);
+  const [googleAccountStatus, setGoogleAccountStatus] = useState<GoogleStatus | null>(null);
+  const [googleBusy, setGoogleBusy] = useState(false);
+  const [googleError, setGoogleError] = useState<string | null>(null);
+  const [driveSyncResult, setDriveSyncResult] = useState<string | null>(null);
 
   useEffect(() => {
     getSettings().then(setSettings);
+    googleStatus().then(setGoogleAccountStatus);
   }, []);
 
   async function handleSave() {
@@ -69,6 +74,45 @@ export function SettingsScreen({ onBack }: Props) {
       getSettings().then(setSettings);
     } catch (e) {
       setStatus(String(e));
+    }
+  }
+
+  async function handleGoogleSignIn() {
+    setGoogleBusy(true);
+    setGoogleError(null);
+    try {
+      await googleSignIn();
+      setGoogleAccountStatus(await googleStatus());
+    } catch (e) {
+      setGoogleError(String(e));
+    } finally {
+      setGoogleBusy(false);
+    }
+  }
+
+  async function handleGoogleSignOut() {
+    setGoogleBusy(true);
+    setGoogleError(null);
+    try {
+      await googleSignOut();
+      setGoogleAccountStatus(await googleStatus());
+      setDriveSyncResult(null);
+    } catch (e) {
+      setGoogleError(String(e));
+    } finally {
+      setGoogleBusy(false);
+    }
+  }
+
+  async function handleDriveSyncNow() {
+    setGoogleBusy(true);
+    setGoogleError(null);
+    try {
+      setDriveSyncResult(await driveSyncNow());
+    } catch (e) {
+      setGoogleError(String(e));
+    } finally {
+      setGoogleBusy(false);
     }
   }
 
@@ -223,8 +267,65 @@ export function SettingsScreen({ onBack }: Props) {
       </section>
 
       <section className="flex flex-col gap-2">
+        <h2 className="text-lg font-semibold text-slate-900">カレンダー連携</h2>
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            checked={settings.calendarEnabled}
+            onChange={(e) => setSettings({ ...settings, calendarEnabled: e.target.checked })}
+          />
+          Google カレンダーを自動で取り込む
+        </label>
+        {settings.calendarEnabled && googleAccountStatus === "signed_in" && (
+          <p className="text-sm text-slate-500">
+            設定を保存した後、初めて有効にした場合はカレンダーへのアクセス許可のため Google への再サインインが必要です。
+          </p>
+        )}
+      </section>
+
+      <section className="flex flex-col gap-2">
         <h2 className="text-lg font-semibold text-slate-900">Google アカウント</h2>
-        <p className="text-sm text-slate-500">Google Drive 連携は今後のバージョンで対応予定です。</p>
+        <p className="text-sm text-slate-700">
+          {googleAccountStatus === "signed_in"
+            ? "サインイン済み"
+            : googleAccountStatus === "signed_out"
+              ? "未サインイン"
+              : "状態を確認しています…"}
+        </p>
+        <div className="flex items-center gap-3">
+          {googleAccountStatus === "signed_in" ? (
+            <>
+              <button
+                type="button"
+                onClick={handleGoogleSignOut}
+                disabled={googleBusy}
+                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+              >
+                サインアウト
+              </button>
+              <button
+                type="button"
+                onClick={handleDriveSyncNow}
+                disabled={googleBusy}
+                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+              >
+                今すぐ Drive 同期
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={handleGoogleSignIn}
+              disabled={googleBusy}
+              className="rounded-md bg-slate-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+            >
+              Google でサインイン
+            </button>
+          )}
+          {googleBusy && <span className="text-sm text-slate-500">処理中…</span>}
+        </div>
+        {driveSyncResult !== null && <p className="text-sm text-slate-600">{driveSyncResult}</p>}
+        {googleError !== null && <p className="text-sm text-red-600">{googleError}</p>}
       </section>
 
       <div className="flex items-center gap-3">
