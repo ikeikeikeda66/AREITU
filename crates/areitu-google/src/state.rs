@@ -7,9 +7,14 @@ pub struct SyncState {
     pub local_content_hash: Option<String>,
 }
 
-pub fn load_state(path: &Path) -> crate::Result<SyncState> {
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CalendarSyncState {
+    pub sync_token: Option<String>,
+}
+
+fn read_json_or_default<T: serde::de::DeserializeOwned + Default>(path: &Path) -> crate::Result<T> {
     if !path.exists() {
-        return Ok(SyncState::default());
+        return Ok(T::default());
     }
     let raw = std::fs::read_to_string(path)?;
     Ok(serde_json::from_str(&raw)?)
@@ -17,14 +22,12 @@ pub fn load_state(path: &Path) -> crate::Result<SyncState> {
 
 /// 書き込みは同一ディレクトリの一時ファイルに行い、`rename` で置き換える。
 /// クラッシュで半端な内容のファイルが残らないようにするため。
-pub fn save_state(path: &Path, state: &SyncState) -> crate::Result<()> {
-    let raw = serde_json::to_string_pretty(state)?;
+fn write_json_atomically<T: serde::Serialize>(path: &Path, value: &T) -> crate::Result<()> {
+    let raw = serde_json::to_string_pretty(value)?;
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let mut tmp_path = dir.join(format!(
         ".{}.tmp-{}",
-        path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("sync-state"),
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("state"),
         std::process::id()
     ));
     // 念のため既存の同名一時ファイルを避ける（実運用では PID で十分だがテストの再実行を考慮）。
@@ -33,9 +36,7 @@ pub fn save_state(path: &Path, state: &SyncState) -> crate::Result<()> {
         suffix += 1;
         tmp_path = dir.join(format!(
             ".{}.tmp-{}-{}",
-            path.file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("sync-state"),
+            path.file_name().and_then(|n| n.to_str()).unwrap_or("state"),
             std::process::id(),
             suffix
         ));
@@ -43,6 +44,22 @@ pub fn save_state(path: &Path, state: &SyncState) -> crate::Result<()> {
     std::fs::write(&tmp_path, raw)?;
     std::fs::rename(&tmp_path, path)?;
     Ok(())
+}
+
+pub fn load_state(path: &Path) -> crate::Result<SyncState> {
+    read_json_or_default(path)
+}
+
+pub fn save_state(path: &Path, state: &SyncState) -> crate::Result<()> {
+    write_json_atomically(path, state)
+}
+
+pub fn load_calendar_state(path: &Path) -> crate::Result<CalendarSyncState> {
+    read_json_or_default(path)
+}
+
+pub fn save_calendar_state(path: &Path, state: &CalendarSyncState) -> crate::Result<()> {
+    write_json_atomically(path, state)
 }
 
 #[cfg(test)]
@@ -75,5 +92,29 @@ mod tests {
         let path = dir.path().join("sync-state.json");
         std::fs::write(&path, "not json").unwrap();
         assert!(load_state(&path).is_err());
+    }
+
+    #[test]
+    fn calendar_state_missing_file_loads_as_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("google-calendar-state.json");
+        assert_eq!(load_calendar_state(&path).unwrap(), CalendarSyncState::default());
+    }
+
+    #[test]
+    fn calendar_state_save_then_load_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("google-calendar-state.json");
+        let state = CalendarSyncState { sync_token: Some("token-1".to_owned()) };
+        save_calendar_state(&path, &state).unwrap();
+        assert_eq!(load_calendar_state(&path).unwrap(), state);
+    }
+
+    #[test]
+    fn calendar_state_corrupt_file_is_an_error_not_a_silent_reset() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("google-calendar-state.json");
+        std::fs::write(&path, "not json").unwrap();
+        assert!(load_calendar_state(&path).is_err());
     }
 }
