@@ -5,7 +5,7 @@ use crate::config::{
     GEMINI_KEY, GOOGLE_PLACES_KEY, OPENAI_KEY,
 };
 use crate::logic::{list_places_dto, rename_place_dto, visits_of_dto, PlaceDto, VisitDto};
-use crate::sync::{sync_on_own_connection, SyncSummary};
+use crate::sync::{sync_on_own_connection_locked, SyncSummary};
 use crate::AppState;
 
 #[tauri::command]
@@ -34,8 +34,9 @@ pub fn rename_place(state: State<AppState>, place_id: i64, name: String) -> Resu
 pub fn sync_now(state: State<AppState>) -> Result<SyncSummary, String> {
     let config = load_config(&state.config_path);
     // AppState.conn を保持したままネットワークを伴う同期を行うと、その間 UI コマンドが
-    // すべてブロックされるため、同期専用の接続を別途開いて実行する。
-    sync_on_own_connection(&state.db_path, &config, &KeyringSecretStore)
+    // すべてブロックされるため、同期専用の接続を別途開いて実行する。sync_lock は
+    // Drive 同期（drive_sync_now・ポーリングサイクル末尾）との相互排除のために取る。
+    sync_on_own_connection_locked(&state.sync_lock, &state.db_path, &config, &KeyringSecretStore)
 }
 
 #[derive(serde::Serialize)]

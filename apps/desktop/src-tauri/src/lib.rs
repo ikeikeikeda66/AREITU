@@ -1,5 +1,6 @@
 mod commands;
 mod config;
+mod google;
 mod logic;
 mod sync;
 mod tray;
@@ -18,6 +19,13 @@ pub struct AppState {
     pub conn: Mutex<rusqlite::Connection>,
     pub config_path: std::path::PathBuf,
     pub db_path: std::path::PathBuf,
+    /// 写真/カレンダー同期（ポーリングスレッド・トレイの「今すぐ同期」・
+    /// `sync_now` コマンド）と Drive 同期（`drive_sync_now` コマンド・
+    /// ポーリングサイクル末尾の Drive 同期）を相互排除するためのロック。
+    /// ロック順序は必ず sync_lock → conn（conn は `with_db_closed` の内側でのみ
+    /// 取る）。UI の読み取り専用コマンド（list_places / visits_of / rename_place）
+    /// はこのロックを取らない。
+    pub sync_lock: Mutex<()>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -44,7 +52,12 @@ pub fn run() {
             std::fs::create_dir_all(&config_dir).expect("failed to create app config dir");
             let config_path = config_dir.join("config.json");
 
-            app.manage(AppState { conn: Mutex::new(conn), config_path, db_path });
+            app.manage(AppState {
+                conn: Mutex::new(conn),
+                config_path,
+                db_path,
+                sync_lock: Mutex::new(()),
+            });
 
             crate::tray::setup_tray(app.handle())?;
             crate::sync::spawn_poll_thread(app.handle().clone());
@@ -58,6 +71,10 @@ pub fn run() {
             commands::sync_now,
             commands::get_settings,
             commands::save_settings,
+            google::google_sign_in,
+            google::google_sign_out,
+            google::google_status,
+            google::drive_sync_now,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

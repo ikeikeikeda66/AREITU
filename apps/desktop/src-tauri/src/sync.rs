@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Mutex;
 
 use areitu_core::pipeline::build_visits;
 use areitu_core::resolve::geocode::ReverseGeocoder;
@@ -104,6 +105,20 @@ pub fn sync_on_own_connection(
     run_sync_with_config(&mut conn, config, secrets)
 }
 
+/// `sync_on_own_connection` を `AppState.sync_lock` の下で実行する。写真/カレンダー
+/// 同期と Drive 同期（`crate::google::drive_sync_locked`）を同時に走らせないための
+/// 唯一の入口であり、ポーリングスレッド・トレイの「今すぐ同期」・`sync_now` コマンドは
+/// 必ずこの関数（か同等のロック取得）を通す。
+pub fn sync_on_own_connection_locked(
+    sync_lock: &Mutex<()>,
+    db_path: &Path,
+    config: &AppConfig,
+    secrets: &dyn SecretStore,
+) -> Result<SyncSummary, String> {
+    let _guard = sync_lock.lock().map_err(|e| e.to_string())?;
+    sync_on_own_connection(db_path, config, secrets)
+}
+
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
@@ -124,7 +139,20 @@ pub fn spawn_poll_thread(app: AppHandle) {
             }
             elapsed = Duration::ZERO;
 
-            let _ = sync_on_own_connection(&state.db_path, &config, &crate::config::KeyringSecretStore);
+            let _ = sync_on_own_connection_locked(
+                &state.sync_lock,
+                &state.db_path,
+                &config,
+                &crate::config::KeyringSecretStore,
+            );
+
+            if let Ok((db_path, state_path)) = crate::google::sync_paths(&app) {
+                if let Err(e) =
+                    crate::google::drive_sync_locked(&state.sync_lock, &state.conn, &db_path, &state_path)
+                {
+                    eprintln!("drive sync skipped this cycle: {e}");
+                }
+            }
         }
     });
 }

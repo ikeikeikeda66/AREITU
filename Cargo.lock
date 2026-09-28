@@ -149,6 +149,7 @@ name = "areitu-desktop"
 version = "0.1.0"
 dependencies = [
  "areitu-core",
+ "areitu-google",
  "chrono",
  "keyring",
  "rusqlite",

@@ -24,7 +24,8 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                 tauri::async_runtime::spawn_blocking(move || {
                     let state = app.state::<crate::AppState>();
                     let config = crate::config::load_config(&state.config_path);
-                    let _ = crate::sync::sync_on_own_connection(
+                    let _ = crate::sync::sync_on_own_connection_locked(
+                        &state.sync_lock,
                         &state.db_path,
                         &config,
                         &crate::config::KeyringSecretStore,
