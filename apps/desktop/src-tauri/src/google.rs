@@ -29,7 +29,9 @@ fn build_auth() -> Result<GoogleAuth<KeyringStore, SystemBrowser>, String> {
 
 #[tauri::command]
 pub fn google_sign_in() -> Result<(), String> {
-    build_auth()?.sign_in().map_err(|e| e.to_string())
+    build_auth()?
+        .sign_in(areitu_google::SCOPE_DRIVE_APPDATA)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
