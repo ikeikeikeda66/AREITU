@@ -112,6 +112,76 @@ pub fn drive_sync_now(app: AppHandle) -> Result<String, String> {
     drive_sync_locked(&state.sync_lock, &state.conn, &db_path, &state_path)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Default, Clone, PartialEq, serde::Serialize)]
+pub struct CalendarIngestSummary {
+    pub events_synced: usize,
+    pub events_removed: usize,
+    pub errors: Vec<String>,
+}
+
+/// カレンダーの1同期サイクル分のページ本文を raw_logs に反映する純粋なロジック。
+/// Google 認証・アクセストークン取得・状態ファイルの読み書きは呼び出し元（`ingest_calendar`）
+/// の責務とし、ここでは渡された `api`/`access_token`/`state` だけを使う。
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn ingest_calendar_page_bodies(
+    conn: &Connection,
+    api: &dyn areitu_google::calendar::CalendarApi,
+    access_token: &str,
+    calendar_id: &str,
+    state: &mut areitu_google::state::CalendarSyncState,
+) -> CalendarIngestSummary {
+    let mut summary = CalendarIngestSummary::default();
+    let fetched = match areitu_google::calendar::fetch_all_pages(api, access_token, calendar_id, state.sync_token.as_deref()) {
+        Ok(f) => f,
+        Err(areitu_google::Error::SyncTokenExpired) => {
+            state.sync_token = None;
+            match areitu_google::calendar::fetch_all_pages(api, access_token, calendar_id, None) {
+                Ok(f) => f,
+                Err(e) => {
+                    summary.errors.push(e.to_string());
+                    return summary;
+                }
+            }
+        }
+        Err(e) => {
+            summary.errors.push(e.to_string());
+            return summary;
+        }
+    };
+
+    for body in &fetched.bodies {
+        match areitu_core::calendar::parse_events(body) {
+            Ok(events) => {
+                for e in &events {
+                    match areitu_core::store::upsert_raw_log(conn, &areitu_core::calendar::to_raw_log(e)) {
+                        Ok(()) => summary.events_synced += 1,
+                        Err(err) => summary.errors.push(err.to_string()),
+                    }
+                }
+            }
+            Err(e) => summary.errors.push(e.to_string()),
+        }
+        match areitu_core::calendar::parse_cancelled_source_ids(body) {
+            Ok(ids) => {
+                for id in ids {
+                    match areitu_core::store::delete_unassigned_raw_log(conn, areitu_core::model::Source::Calendar, &id) {
+                        Ok(true) => summary.events_removed += 1,
+                        Ok(false) => {}
+                        Err(err) => summary.errors.push(err.to_string()),
+                    }
+                }
+            }
+            Err(e) => summary.errors.push(e.to_string()),
+        }
+    }
+
+    if fetched.next_sync_token.is_some() {
+        state.sync_token = fetched.next_sync_token;
+    }
+    summary
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,5 +256,116 @@ mod tests {
             // 解放後は（build_auth が env 変数なしで即座に失敗するので）速やかに完了する。
             rx.recv_timeout(Duration::from_secs(5)).expect("drive_sync_locked never completed after sync_lock was released");
         });
+    }
+}
+
+#[cfg(test)]
+mod ingest_calendar_page_bodies_tests {
+    use super::*;
+    use areitu_google::calendar::{CalendarApi, EventsListParams, EventsPage};
+    use areitu_google::state::CalendarSyncState;
+    use std::sync::Mutex;
+
+    struct FakeCalendarApi {
+        pages: Mutex<Vec<areitu_google::Result<EventsPage>>>,
+        seen_sync_tokens: Mutex<Vec<Option<String>>>,
+    }
+
+    impl FakeCalendarApi {
+        fn new(pages: Vec<areitu_google::Result<EventsPage>>) -> Self {
+            FakeCalendarApi { pages: Mutex::new(pages), seen_sync_tokens: Mutex::new(Vec::new()) }
+        }
+    }
+
+    impl CalendarApi for FakeCalendarApi {
+        fn list_events_page(&self, _access_token: &str, params: &EventsListParams) -> areitu_google::Result<EventsPage> {
+            self.seen_sync_tokens.lock().unwrap().push(params.sync_token.map(str::to_owned));
+            let mut pages = self.pages.lock().unwrap();
+            assert!(!pages.is_empty(), "FakeCalendarApi called more times than pages were queued");
+            pages.remove(0)
+        }
+    }
+
+    fn events_json(id: &str, status: &str) -> String {
+        format!(
+            r#"{{"items":[{{"id":"{id}","status":"{status}","summary":"ランチ","start":{{"dateTime":"2026-09-01T12:00:00+09:00"}},"end":{{"dateTime":"2026-09-01T13:00:00+09:00"}}}}]}}"#
+        )
+    }
+
+    fn calendar_row_count(c: &rusqlite::Connection) -> i64 {
+        c.query_row("SELECT COUNT(*) FROM raw_logs WHERE source = 'calendar'", [], |r| r.get(0)).unwrap()
+    }
+
+    #[test]
+    fn upserts_confirmed_events_and_advances_sync_token() {
+        let c = areitu_core::db::open_in_memory().unwrap();
+        let api = FakeCalendarApi::new(vec![Ok(EventsPage {
+            body: events_json("e1", "confirmed"),
+            next_page_token: None,
+            next_sync_token: Some("token-1".to_owned()),
+        })]);
+        let mut state = CalendarSyncState::default();
+        let summary = ingest_calendar_page_bodies(&c, &api, "access-token", "primary", &mut state);
+        assert_eq!(summary.events_synced, 1);
+        assert!(summary.errors.is_empty(), "{:?}", summary.errors);
+        assert_eq!(state.sync_token.as_deref(), Some("token-1"));
+        assert_eq!(calendar_row_count(&c), 1);
+    }
+
+    #[test]
+    fn cancelled_event_removes_unassigned_raw_log() {
+        let c = areitu_core::db::open_in_memory().unwrap();
+        let mut state = CalendarSyncState::default();
+        let api1 = FakeCalendarApi::new(vec![Ok(EventsPage {
+            body: events_json("e1", "confirmed"),
+            next_page_token: None,
+            next_sync_token: Some("token-1".to_owned()),
+        })]);
+        ingest_calendar_page_bodies(&c, &api1, "access-token", "primary", &mut state);
+        assert_eq!(calendar_row_count(&c), 1);
+
+        let api2 = FakeCalendarApi::new(vec![Ok(EventsPage {
+            body: events_json("e1", "cancelled"),
+            next_page_token: None,
+            next_sync_token: Some("token-2".to_owned()),
+        })]);
+        let summary = ingest_calendar_page_bodies(&c, &api2, "access-token", "primary", &mut state);
+        assert_eq!(summary.events_removed, 1);
+        assert_eq!(calendar_row_count(&c), 0);
+    }
+
+    #[test]
+    fn sync_token_expired_clears_token_and_retries_full_sync_once() {
+        let c = areitu_core::db::open_in_memory().unwrap();
+        let mut state = CalendarSyncState { sync_token: Some("stale-token".to_owned()) };
+        let api = FakeCalendarApi::new(vec![
+            Err(areitu_google::Error::SyncTokenExpired),
+            Ok(EventsPage {
+                body: events_json("e1", "confirmed"),
+                next_page_token: None,
+                next_sync_token: Some("fresh-token".to_owned()),
+            }),
+        ]);
+        let summary = ingest_calendar_page_bodies(&c, &api, "access-token", "primary", &mut state);
+        assert_eq!(summary.events_synced, 1);
+        assert!(summary.errors.is_empty(), "{:?}", summary.errors);
+        assert_eq!(state.sync_token.as_deref(), Some("fresh-token"));
+        let seen = api.seen_sync_tokens.lock().unwrap();
+        assert_eq!(seen.len(), 2, "expected one failed attempt with the stale token and one full-sync retry");
+        assert_eq!(seen[0].as_deref(), Some("stale-token"));
+        assert_eq!(seen[1], None, "the retry after a 410 must not resend the stale sync token");
+    }
+
+    #[test]
+    fn pagination_across_two_pages_syncs_both_events() {
+        let c = areitu_core::db::open_in_memory().unwrap();
+        let api = FakeCalendarApi::new(vec![
+            Ok(EventsPage { body: events_json("e1", "confirmed"), next_page_token: Some("p2".to_owned()), next_sync_token: None }),
+            Ok(EventsPage { body: events_json("e2", "confirmed"), next_page_token: None, next_sync_token: Some("final-token".to_owned()) }),
+        ]);
+        let mut state = CalendarSyncState::default();
+        let summary = ingest_calendar_page_bodies(&c, &api, "access-token", "primary", &mut state);
+        assert_eq!(summary.events_synced, 2);
+        assert_eq!(state.sync_token.as_deref(), Some("final-token"));
     }
 }
