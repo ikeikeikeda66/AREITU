@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod calendar;
 pub mod decision;
 pub mod drive;
 pub mod keychain;
@@ -23,6 +24,8 @@ pub enum Error {
     OAuth(String),
     #[error("keychain: {0}")]
     Keychain(String),
+    #[error("calendar sync token expired (HTTP 410)")]
+    SyncTokenExpired,
     #[error("{0}")]
     Invalid(String),
 }
