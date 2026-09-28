@@ -24,6 +24,8 @@ export interface SyncSummary {
 
 export type LlmProvider = "none" | "ollama" | "openai" | "gemini";
 
+export type KeyStatus = "set" | "not_set" | "unavailable";
+
 export interface Settings {
   watchedDirs: string[];
   llmProvider: LlmProvider;
@@ -34,9 +36,10 @@ export interface Settings {
   googlePlacesEnabled: boolean;
   minConfidence: number;
   pollIntervalMinutes: number;
-  hasOpenaiKey: boolean;
-  hasGeminiKey: boolean;
-  hasGooglePlacesKey: boolean;
+  calendarEnabled: boolean;
+  openaiKeyStatus: KeyStatus;
+  geminiKeyStatus: KeyStatus;
+  googlePlacesKeyStatus: KeyStatus;
 }
 
 export interface SaveSettingsInput {
@@ -49,6 +52,7 @@ export interface SaveSettingsInput {
   googlePlacesEnabled: boolean;
   minConfidence: number;
   pollIntervalMinutes: number;
+  calendarEnabled: boolean;
   openaiApiKey: string | null;
   geminiApiKey: string | null;
   googlePlacesApiKey: string | null;

@@ -1,8 +1,8 @@
 use tauri::State;
 
 use crate::config::{
-    load_config, save_config, AppConfig, KeyringSecretStore, LlmProvider, SecretStore,
-    GEMINI_KEY, GOOGLE_PLACES_KEY, OPENAI_KEY,
+    config_exists, key_status, load_config, save_config, AppConfig, KeyStatus, KeyringSecretStore, LlmProvider,
+    SecretStore, GEMINI_KEY, GOOGLE_PLACES_KEY, OPENAI_KEY,
 };
 use crate::logic::{list_places_dto, rename_place_dto, visits_of_dto, PlaceDto, VisitDto};
 use crate::sync::{sync_on_own_connection_locked, SyncSummary};
@@ -51,9 +51,10 @@ pub struct SettingsDto {
     pub google_places_enabled: bool,
     pub min_confidence: f64,
     pub poll_interval_minutes: u32,
-    pub has_openai_key: bool,
-    pub has_gemini_key: bool,
-    pub has_google_places_key: bool,
+    pub calendar_enabled: bool,
+    pub openai_key_status: KeyStatus,
+    pub gemini_key_status: KeyStatus,
+    pub google_places_key_status: KeyStatus,
 }
 
 #[derive(serde::Deserialize)]
@@ -68,6 +69,7 @@ pub struct SaveSettingsDto {
     pub google_places_enabled: bool,
     pub min_confidence: f64,
     pub poll_interval_minutes: u32,
+    pub calendar_enabled: bool,
     /// None なら変更しない。Some("") ならキーチェーンから削除する。Some(value) (非空) なら保存する。
     pub openai_api_key: Option<String>,
     pub gemini_api_key: Option<String>,
@@ -88,9 +90,10 @@ pub fn get_settings(state: State<AppState>) -> SettingsDto {
         google_places_enabled: config.google_places_enabled,
         min_confidence: config.min_confidence,
         poll_interval_minutes: config.poll_interval_minutes,
-        has_openai_key: matches!(secrets.get(OPENAI_KEY), Ok(Some(_))),
-        has_gemini_key: matches!(secrets.get(GEMINI_KEY), Ok(Some(_))),
-        has_google_places_key: matches!(secrets.get(GOOGLE_PLACES_KEY), Ok(Some(_))),
+        calendar_enabled: config.calendar_enabled,
+        openai_key_status: key_status(&secrets, OPENAI_KEY),
+        gemini_key_status: key_status(&secrets, GEMINI_KEY),
+        google_places_key_status: key_status(&secrets, GOOGLE_PLACES_KEY),
     }
 }
 
@@ -104,8 +107,6 @@ fn apply_secret(secrets: &dyn SecretStore, key: &str, value: Option<String>) -> 
 
 #[tauri::command]
 pub fn save_settings(state: State<AppState>, settings: SaveSettingsDto) -> Result<(), String> {
-    // calendar_enabled はこの DTO に含まれないため、既存の設定値を保持する。
-    let existing = load_config(&state.config_path);
     let config = AppConfig {
         watched_dirs: settings.watched_dirs,
         llm_provider: settings.llm_provider,
@@ -116,13 +117,18 @@ pub fn save_settings(state: State<AppState>, settings: SaveSettingsDto) -> Resul
         google_places_enabled: settings.google_places_enabled,
         min_confidence: settings.min_confidence,
         poll_interval_minutes: settings.poll_interval_minutes,
-        calendar_enabled: existing.calendar_enabled,
+        calendar_enabled: settings.calendar_enabled,
     };
     let secrets = KeyringSecretStore;
     apply_secret(&secrets, OPENAI_KEY, settings.openai_api_key)?;
     apply_secret(&secrets, GEMINI_KEY, settings.gemini_api_key)?;
     apply_secret(&secrets, GOOGLE_PLACES_KEY, settings.google_places_api_key)?;
     save_config(&state.config_path, &config).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn setup_completed(state: State<AppState>) -> bool {
+    config_exists(&state.config_path)
 }
 
 #[cfg(test)]
@@ -141,9 +147,10 @@ mod tests {
             google_places_enabled: false,
             min_confidence: 0.6,
             poll_interval_minutes: 30,
-            has_openai_key: false,
-            has_gemini_key: false,
-            has_google_places_key: false,
+            calendar_enabled: false,
+            openai_key_status: KeyStatus::NotSet,
+            gemini_key_status: KeyStatus::NotSet,
+            google_places_key_status: KeyStatus::Unavailable,
         };
         let json = serde_json::to_value(&dto).unwrap();
         let obj = json.as_object().unwrap();
@@ -157,13 +164,15 @@ mod tests {
             "googlePlacesEnabled",
             "minConfidence",
             "pollIntervalMinutes",
-            "hasOpenaiKey",
-            "hasGeminiKey",
-            "hasGooglePlacesKey",
+            "calendarEnabled",
+            "openaiKeyStatus",
+            "geminiKeyStatus",
+            "googlePlacesKeyStatus",
         ] {
             assert!(obj.contains_key(key), "missing {key}: {json}");
         }
         assert!(!obj.contains_key("watched_dirs"), "snake_case leaked: {json}");
+        assert_eq!(obj.get("googlePlacesKeyStatus").unwrap(), "unavailable");
     }
 
     #[test]
@@ -178,6 +187,7 @@ mod tests {
             "googlePlacesEnabled": true,
             "minConfidence": 0.6,
             "pollIntervalMinutes": 30,
+            "calendarEnabled": true,
             "openaiApiKey": "sk-test",
             "geminiApiKey": null,
             "googlePlacesApiKey": null,
@@ -186,7 +196,14 @@ mod tests {
         assert_eq!(dto.watched_dirs, vec!["/photos".to_string()]);
         assert_eq!(dto.llm_provider, LlmProvider::OpenAi);
         assert!(dto.google_places_enabled);
+        assert!(dto.calendar_enabled);
         assert_eq!(dto.openai_api_key.as_deref(), Some("sk-test"));
         assert_eq!(dto.gemini_api_key, None);
+    }
+
+    #[test]
+    fn setup_completed_reflects_whether_config_file_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!crate::config::config_exists(&dir.path().join("config.json")));
     }
 }

@@ -67,6 +67,7 @@ pub fn run() {
             commands::sync_now,
             commands::get_settings,
             commands::save_settings,
+            commands::setup_completed,
             google::google_sign_in,
             google::google_sign_out,
             google::google_status,

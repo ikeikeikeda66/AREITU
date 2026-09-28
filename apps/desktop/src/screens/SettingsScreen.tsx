@@ -1,6 +1,17 @@
 import { useEffect, useState } from "react";
 import { getSettings, saveSettings } from "../api/tauri";
-import type { LlmProvider, Settings } from "../api/types";
+import type { KeyStatus, LlmProvider, Settings } from "../api/types";
+
+function keyStatusLabel(status: KeyStatus): string {
+  switch (status) {
+    case "set":
+      return "設定済み";
+    case "unavailable":
+      return "キーチェーンにアクセスできません";
+    default:
+      return "未設定";
+  }
+}
 
 interface Props {
   onBack: () => void;
@@ -16,9 +27,10 @@ const defaultSettings: Settings = {
   googlePlacesEnabled: false,
   minConfidence: 0.6,
   pollIntervalMinutes: 30,
-  hasOpenaiKey: false,
-  hasGeminiKey: false,
-  hasGooglePlacesKey: false,
+  calendarEnabled: false,
+  openaiKeyStatus: "not_set",
+  geminiKeyStatus: "not_set",
+  googlePlacesKeyStatus: "not_set",
 };
 
 export function SettingsScreen({ onBack }: Props) {
@@ -45,6 +57,7 @@ export function SettingsScreen({ onBack }: Props) {
         googlePlacesEnabled: settings.googlePlacesEnabled,
         minConfidence: settings.minConfidence,
         pollIntervalMinutes: settings.pollIntervalMinutes,
+        calendarEnabled: settings.calendarEnabled,
         openaiApiKey: openaiKeyInput === "" ? null : openaiKeyInput,
         geminiApiKey: geminiKeyInput === "" ? null : geminiKeyInput,
         googlePlacesApiKey: placesKeyInput === "" ? null : placesKeyInput,
@@ -145,7 +158,7 @@ export function SettingsScreen({ onBack }: Props) {
 
         {settings.llmProvider === "openai" && (
           <label className="flex flex-col gap-1 text-sm text-slate-700">
-            OpenAI API キー（{settings.hasOpenaiKey ? "設定済み" : "未設定"}）
+            OpenAI API キー（{keyStatusLabel(settings.openaiKeyStatus)}）
             <input
               type="password"
               value={openaiKeyInput}
@@ -159,7 +172,7 @@ export function SettingsScreen({ onBack }: Props) {
 
         {settings.llmProvider === "gemini" && (
           <label className="flex flex-col gap-1 text-sm text-slate-700">
-            Gemini API キー（{settings.hasGeminiKey ? "設定済み" : "未設定"}）
+            Gemini API キー（{keyStatusLabel(settings.geminiKeyStatus)}）
             <input
               type="password"
               value={geminiKeyInput}
@@ -183,7 +196,7 @@ export function SettingsScreen({ onBack }: Props) {
           Google Places API を優先的に使う
         </label>
         <label className="flex flex-col gap-1 text-sm text-slate-700">
-          Google Places API キー（{settings.hasGooglePlacesKey ? "設定済み" : "未設定"}）
+          Google Places API キー（{keyStatusLabel(settings.googlePlacesKeyStatus)}）
           <input
             type="password"
             value={placesKeyInput}

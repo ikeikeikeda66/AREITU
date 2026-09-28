@@ -55,8 +55,6 @@ pub fn save_config(path: &Path, config: &AppConfig) -> std::io::Result<()> {
     std::fs::write(path, json)
 }
 
-// Task 9（初回起動オンボーディング）で使用される。
-#[allow(dead_code)]
 pub fn config_exists(path: &Path) -> bool {
     path.exists()
 }
@@ -72,8 +70,6 @@ pub trait SecretStore {
     fn delete(&self, key: &str) -> Result<(), String>;
 }
 
-// Task 10（設定画面のキー状態表示）で使用される。
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KeyStatus {
@@ -82,7 +78,6 @@ pub enum KeyStatus {
     Unavailable,
 }
 
-#[allow(dead_code)]
 pub fn key_status(secrets: &dyn SecretStore, key: &str) -> KeyStatus {
     match secrets.get(key) {
         Ok(Some(_)) => KeyStatus::Set,
