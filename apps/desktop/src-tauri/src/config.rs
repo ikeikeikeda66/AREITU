@@ -6,6 +6,7 @@ use std::path::Path;
 pub enum LlmProvider {
     None,
     Ollama,
+    #[serde(rename = "openai")]
     OpenAi,
     Gemini,
 }
@@ -143,6 +144,14 @@ mod tests {
         config.poll_interval_minutes = 15;
         save_config(&path, &config).unwrap();
         assert_eq!(load_config(&path), config);
+    }
+
+    #[test]
+    fn llm_provider_open_ai_round_trips_as_openai() {
+        let json = serde_json::to_string(&LlmProvider::OpenAi).unwrap();
+        assert_eq!(json, "\"openai\"");
+        let back: LlmProvider = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, LlmProvider::OpenAi);
     }
 
     #[test]

@@ -19,6 +19,7 @@ const USER_AGENT: &str = concat!(
 );
 
 #[derive(Debug, Default, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SyncSummary {
     pub scanned: usize,
     pub scan_errors: Vec<String>,
@@ -294,5 +295,23 @@ mod tests {
             h.join().unwrap();
         }
         // デッドロックせずに全スレッドが完了すればテストは成功
+    }
+
+    #[test]
+    fn sync_summary_serializes_as_camel_case() {
+        let summary = SyncSummary {
+            scanned: 1,
+            scan_errors: vec!["boom".to_string()],
+            visits_created: 2,
+            resolve_failed: 3,
+        };
+        let json = serde_json::to_value(&summary).unwrap();
+        let obj = json.as_object().unwrap();
+        assert!(obj.contains_key("scanErrors"), "missing scanErrors: {json}");
+        assert!(obj.contains_key("visitsCreated"), "missing visitsCreated: {json}");
+        assert!(obj.contains_key("resolveFailed"), "missing resolveFailed: {json}");
+        assert!(!obj.contains_key("scan_errors"), "snake_case leaked: {json}");
+        assert!(!obj.contains_key("visits_created"), "snake_case leaked: {json}");
+        assert!(!obj.contains_key("resolve_failed"), "snake_case leaked: {json}");
     }
 }

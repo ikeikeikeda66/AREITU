@@ -40,6 +40,7 @@ pub fn sync_now(state: State<AppState>) -> Result<SyncSummary, String> {
 }
 
 #[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SettingsDto {
     pub watched_dirs: Vec<String>,
     pub llm_provider: LlmProvider,
@@ -56,6 +57,7 @@ pub struct SettingsDto {
 }
 
 #[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SaveSettingsDto {
     pub watched_dirs: Vec<String>,
     pub llm_provider: LlmProvider,
@@ -118,4 +120,70 @@ pub fn save_settings(state: State<AppState>, settings: SaveSettingsDto) -> Resul
     apply_secret(&secrets, GEMINI_KEY, settings.gemini_api_key)?;
     apply_secret(&secrets, GOOGLE_PLACES_KEY, settings.google_places_api_key)?;
     save_config(&state.config_path, &config).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_dto_serializes_as_camel_case() {
+        let dto = SettingsDto {
+            watched_dirs: vec!["/photos".to_string()],
+            llm_provider: LlmProvider::Ollama,
+            ollama_url: "http://localhost:11434".to_string(),
+            ollama_model: "llama3".to_string(),
+            openai_model: "gpt-4o-mini".to_string(),
+            gemini_model: "gemini-1.5-flash".to_string(),
+            google_places_enabled: false,
+            min_confidence: 0.6,
+            poll_interval_minutes: 30,
+            has_openai_key: false,
+            has_gemini_key: false,
+            has_google_places_key: false,
+        };
+        let json = serde_json::to_value(&dto).unwrap();
+        let obj = json.as_object().unwrap();
+        for key in [
+            "watchedDirs",
+            "llmProvider",
+            "ollamaUrl",
+            "ollamaModel",
+            "openaiModel",
+            "geminiModel",
+            "googlePlacesEnabled",
+            "minConfidence",
+            "pollIntervalMinutes",
+            "hasOpenaiKey",
+            "hasGeminiKey",
+            "hasGooglePlacesKey",
+        ] {
+            assert!(obj.contains_key(key), "missing {key}: {json}");
+        }
+        assert!(!obj.contains_key("watched_dirs"), "snake_case leaked: {json}");
+    }
+
+    #[test]
+    fn save_settings_dto_deserializes_camel_case_payload() {
+        let payload = serde_json::json!({
+            "watchedDirs": ["/photos"],
+            "llmProvider": "openai",
+            "ollamaUrl": "http://localhost:11434",
+            "ollamaModel": "",
+            "openaiModel": "gpt-4o-mini",
+            "geminiModel": "gemini-1.5-flash",
+            "googlePlacesEnabled": true,
+            "minConfidence": 0.6,
+            "pollIntervalMinutes": 30,
+            "openaiApiKey": "sk-test",
+            "geminiApiKey": null,
+            "googlePlacesApiKey": null,
+        });
+        let dto: SaveSettingsDto = serde_json::from_value(payload).unwrap();
+        assert_eq!(dto.watched_dirs, vec!["/photos".to_string()]);
+        assert_eq!(dto.llm_provider, LlmProvider::OpenAi);
+        assert!(dto.google_places_enabled);
+        assert_eq!(dto.openai_api_key.as_deref(), Some("sk-test"));
+        assert_eq!(dto.gemini_api_key, None);
+    }
 }

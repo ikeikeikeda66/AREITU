@@ -3,6 +3,7 @@ use areitu_core::store::rename_place;
 use rusqlite::Connection;
 
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PlaceDto {
     pub id: i64,
     pub name: String,
@@ -11,6 +12,7 @@ pub struct PlaceDto {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VisitDto {
     pub started_at: String,
     pub ended_at: String,
@@ -117,5 +119,35 @@ mod tests {
         let mut c = open_in_memory().unwrap();
         let id = seed_place(&c, "A", "2026-09-01 12:00");
         assert!(rename_place_dto(&mut c, id, "   ").is_err());
+    }
+
+    #[test]
+    fn place_dto_serializes_as_camel_case() {
+        let dto = PlaceDto {
+            id: 1,
+            name: "A".to_string(),
+            visit_count: 3,
+            last_visit: "2026-09-01T12:00:00".to_string(),
+        };
+        let json = serde_json::to_value(&dto).unwrap();
+        let obj = json.as_object().unwrap();
+        assert!(obj.contains_key("visitCount"), "missing visitCount: {json}");
+        assert!(obj.contains_key("lastVisit"), "missing lastVisit: {json}");
+        assert!(!obj.contains_key("visit_count"), "snake_case leaked: {json}");
+        assert!(!obj.contains_key("last_visit"), "snake_case leaked: {json}");
+    }
+
+    #[test]
+    fn visit_dto_serializes_as_camel_case() {
+        let dto = VisitDto {
+            started_at: "2026-09-01T12:00:00".to_string(),
+            ended_at: "2026-09-01T12:30:00".to_string(),
+        };
+        let json = serde_json::to_value(&dto).unwrap();
+        let obj = json.as_object().unwrap();
+        assert!(obj.contains_key("startedAt"), "missing startedAt: {json}");
+        assert!(obj.contains_key("endedAt"), "missing endedAt: {json}");
+        assert!(!obj.contains_key("started_at"), "snake_case leaked: {json}");
+        assert!(!obj.contains_key("ended_at"), "snake_case leaked: {json}");
     }
 }
