@@ -82,6 +82,16 @@ pub fn to_raw_log(e: &CalendarEvent) -> RawLog {
     }
 }
 
+pub fn parse_cancelled_source_ids(json: &str) -> Result<Vec<String>> {
+    let resp: EventsResponse = serde_json::from_str(json)?;
+    Ok(resp
+        .items
+        .into_iter()
+        .filter(|e| e.status.as_deref() == Some("cancelled"))
+        .map(|e| e.id)
+        .collect())
+}
+
 pub fn ingest_calendar_file(conn: &Connection, path: &Path) -> Result<usize> {
     let events = parse_events(&std::fs::read_to_string(path)?)?;
     for e in &events {
@@ -146,5 +156,15 @@ mod tests {
     #[test]
     fn broken_json_is_error() {
         assert!(parse_events("{").is_err());
+    }
+
+    #[test]
+    fn cancelled_events_are_extracted_by_id() {
+        assert_eq!(parse_cancelled_source_ids(JSON).unwrap(), vec!["a3"]);
+    }
+
+    #[test]
+    fn no_cancelled_events_is_an_empty_list() {
+        assert!(parse_cancelled_source_ids(r#"{"items":[{"id":"a1","status":"confirmed","start":{"dateTime":"2026-09-01T12:00:00+09:00"},"end":{"dateTime":"2026-09-01T13:00:00+09:00"}}]}"#).unwrap().is_empty());
     }
 }
