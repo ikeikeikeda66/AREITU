@@ -15,11 +15,31 @@ pub enum SyncOutcome {
     Conflict { conflict_backup_name: String },
 }
 
+/// アプリの共有 DB コネクションを、実際にファイルを入れ替える処理の間だけ
+/// 閉じるためのフック。デスクトップアプリでは `&Mutex<Connection>` をラップした
+/// 実装を渡し、テストや CLI では `NoopSwapGuard` を渡す。トークン取得・Drive の
+/// list/upload/download・ハッシュ計算の間は共有コネクションを開いたままにする
+/// ため、`sync_now` はこのフックを `swap_db_files` の呼び出しにだけ使う。
+pub trait DbSwapGuard {
+    fn with_db_closed(&self, f: &mut dyn FnMut() -> crate::Result<()>) -> crate::Result<()>;
+}
+
+/// 共有 DB コネクションを持たない場面（テスト・CLI）用の no-op 実装。
+/// コネクションを閉じずに `f` をそのまま呼ぶ。
+pub struct NoopSwapGuard;
+
+impl DbSwapGuard for NoopSwapGuard {
+    fn with_db_closed(&self, f: &mut dyn FnMut() -> crate::Result<()>) -> crate::Result<()> {
+        f()
+    }
+}
+
 pub struct SyncContext<'a> {
     pub drive: &'a dyn DriveApi,
     pub access_token: &'a str,
     pub db_path: &'a Path,
     pub state_path: &'a Path,
+    pub swap_guard: &'a dyn DbSwapGuard,
 }
 
 /// リモートに向けたダウンロード＆スワップの直前に呼ぶ。ジャーナルファイル
@@ -86,7 +106,7 @@ fn bootstrap(
             let bytes = ctx.drive.download(ctx.access_token, &remote_file.id)?;
             let downloaded_path = snapshot_path.with_extension("downloaded");
             std::fs::write(&downloaded_path, &bytes)?;
-            swap_db_files(ctx.db_path, &downloaded_path)?;
+            ctx.swap_guard.with_db_closed(&mut || swap_db_files(ctx.db_path, &downloaded_path))?;
             state.remote_file_id = Some(remote_file.id);
             state.remote_modified_time = remote_file.modified_time;
             state.local_content_hash = Some(sha256_hex(ctx.db_path)?);
@@ -119,7 +139,7 @@ fn steady_state(
             let bytes = ctx.drive.download(ctx.access_token, &remote_file.id)?;
             let downloaded_path = snapshot_path.with_extension("downloaded");
             std::fs::write(&downloaded_path, &bytes)?;
-            swap_db_files(ctx.db_path, &downloaded_path)?;
+            ctx.swap_guard.with_db_closed(&mut || swap_db_files(ctx.db_path, &downloaded_path))?;
             state.remote_file_id = Some(remote_file.id);
             state.remote_modified_time = remote_file.modified_time;
             state.local_content_hash = Some(sha256_hex(ctx.db_path)?);
@@ -218,7 +238,13 @@ mod tests {
         let db_path = make_local_db(dir.path(), "first-run");
         let state_path = dir.path().join("sync-state.json");
         let drive = FakeDrive::empty();
-        let ctx = SyncContext { drive: &drive, access_token: "token", db_path: &db_path, state_path: &state_path };
+        let ctx = SyncContext {
+            drive: &drive,
+            access_token: "token",
+            db_path: &db_path,
+            state_path: &state_path,
+            swap_guard: &NoopSwapGuard,
+        };
 
         let outcome = sync_now(&ctx).unwrap();
         assert_eq!(outcome, SyncOutcome::Uploaded);
@@ -238,7 +264,13 @@ mod tests {
         let remote_bytes = std::fs::read(&remote_db_path).unwrap();
         let drive = FakeDrive::seeded(DB_FILE_NAME, "2026-09-27T00:00:00Z", &remote_bytes);
 
-        let ctx = SyncContext { drive: &drive, access_token: "token", db_path: &db_path, state_path: &state_path };
+        let ctx = SyncContext {
+            drive: &drive,
+            access_token: "token",
+            db_path: &db_path,
+            state_path: &state_path,
+            swap_guard: &NoopSwapGuard,
+        };
         let outcome = sync_now(&ctx).unwrap();
         assert_eq!(outcome, SyncOutcome::Downloaded);
 
@@ -253,7 +285,13 @@ mod tests {
         let db_path = make_local_db(dir.path(), "unchanged");
         let state_path = dir.path().join("sync-state.json");
         let drive = FakeDrive::empty();
-        let ctx = SyncContext { drive: &drive, access_token: "token", db_path: &db_path, state_path: &state_path };
+        let ctx = SyncContext {
+            drive: &drive,
+            access_token: "token",
+            db_path: &db_path,
+            state_path: &state_path,
+            swap_guard: &NoopSwapGuard,
+        };
 
         sync_now(&ctx).unwrap(); // 1回目: bootstrap upload
         let outcome = sync_now(&ctx).unwrap(); // 2回目: 何も変わっていない
@@ -267,7 +305,13 @@ mod tests {
         let db_path = make_local_db(dir.path(), "v1");
         let state_path = dir.path().join("sync-state.json");
         let drive = FakeDrive::empty();
-        let ctx = SyncContext { drive: &drive, access_token: "token", db_path: &db_path, state_path: &state_path };
+        let ctx = SyncContext {
+            drive: &drive,
+            access_token: "token",
+            db_path: &db_path,
+            state_path: &state_path,
+            swap_guard: &NoopSwapGuard,
+        };
 
         sync_now(&ctx).unwrap();
         make_local_db(dir.path(), "v2-changed-locally");
@@ -281,7 +325,13 @@ mod tests {
         let db_path = make_local_db(dir.path(), "local-unchanged");
         let state_path = dir.path().join("sync-state.json");
         let drive = FakeDrive::empty();
-        let ctx = SyncContext { drive: &drive, access_token: "token", db_path: &db_path, state_path: &state_path };
+        let ctx = SyncContext {
+            drive: &drive,
+            access_token: "token",
+            db_path: &db_path,
+            state_path: &state_path,
+            swap_guard: &NoopSwapGuard,
+        };
         sync_now(&ctx).unwrap();
 
         // 別デバイスがリモートを更新したことを模す。
@@ -304,7 +354,13 @@ mod tests {
         let db_path = make_local_db(dir.path(), "local-unchanged");
         let state_path = dir.path().join("sync-state.json");
         let drive = FakeDrive::empty();
-        let ctx = SyncContext { drive: &drive, access_token: "token", db_path: &db_path, state_path: &state_path };
+        let ctx = SyncContext {
+            drive: &drive,
+            access_token: "token",
+            db_path: &db_path,
+            state_path: &state_path,
+            swap_guard: &NoopSwapGuard,
+        };
         sync_now(&ctx).unwrap();
 
         // 別デバイスがリモートを更新したことを模す。
@@ -335,7 +391,13 @@ mod tests {
         let db_path = make_local_db(dir.path(), "v1");
         let state_path = dir.path().join("sync-state.json");
         let drive = FakeDrive::empty();
-        let ctx = SyncContext { drive: &drive, access_token: "token", db_path: &db_path, state_path: &state_path };
+        let ctx = SyncContext {
+            drive: &drive,
+            access_token: "token",
+            db_path: &db_path,
+            state_path: &state_path,
+            swap_guard: &NoopSwapGuard,
+        };
         sync_now(&ctx).unwrap();
 
         // 両方が変わる: リモートは別デバイスから、ローカルはこのマシンから。
@@ -360,5 +422,87 @@ mod tests {
         let conn = rusqlite::Connection::open(&db_path).unwrap();
         let v: String = conn.query_row("SELECT v FROM marker", [], |r| r.get(0)).unwrap();
         assert_eq!(v, "updated-here-too");
+    }
+
+    /// 共有 DB コネクションを閉じるフックは、実際に `swap_db_files` を呼ぶ
+    /// ダウンロード経路でだけ呼ばれるべきで、アップロードのみ・変化なしの
+    /// サイクルでは一度も呼ばれてはならない（＝トークン取得・Drive の
+    /// list/upload/download・ハッシュ計算の間は共有コネクションを閉じない）。
+    struct RecordingSwapGuard {
+        calls: Mutex<u32>,
+    }
+
+    impl RecordingSwapGuard {
+        fn new() -> Self {
+            RecordingSwapGuard { calls: Mutex::new(0) }
+        }
+
+        fn call_count(&self) -> u32 {
+            *self.calls.lock().unwrap()
+        }
+    }
+
+    impl DbSwapGuard for RecordingSwapGuard {
+        fn with_db_closed(&self, f: &mut dyn FnMut() -> crate::Result<()>) -> crate::Result<()> {
+            *self.calls.lock().unwrap() += 1;
+            f()
+        }
+    }
+
+    #[test]
+    fn swap_guard_is_invoked_exactly_once_on_a_remote_only_change_download() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = make_local_db(dir.path(), "local-unchanged");
+        let state_path = dir.path().join("sync-state.json");
+        let drive = FakeDrive::empty();
+        let guard = RecordingSwapGuard::new();
+        let ctx = SyncContext {
+            drive: &drive,
+            access_token: "token",
+            db_path: &db_path,
+            state_path: &state_path,
+            swap_guard: &guard,
+        };
+        sync_now(&ctx).unwrap(); // bootstrap upload。ダウンロードではないので guard は呼ばれない。
+        assert_eq!(guard.call_count(), 0);
+
+        // 別デバイスがリモートを更新（ローカルは変わらない）。
+        let file_id = drive.files.lock().unwrap()[0].id.clone();
+        let other_dir = tempfile::tempdir().unwrap();
+        let other_db = make_local_db(other_dir.path(), "updated-elsewhere");
+        let other_bytes = std::fs::read(&other_db).unwrap();
+        drive.upload_update("token", &file_id, &other_bytes).unwrap();
+
+        let outcome = sync_now(&ctx).unwrap();
+        assert_eq!(outcome, SyncOutcome::Downloaded);
+        assert_eq!(guard.call_count(), 1, "the guard must be invoked exactly once around the file swap");
+    }
+
+    #[test]
+    fn swap_guard_is_never_invoked_on_upload_only_or_noop_syncs() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = make_local_db(dir.path(), "v1");
+        let state_path = dir.path().join("sync-state.json");
+        let drive = FakeDrive::empty();
+        let guard = RecordingSwapGuard::new();
+        let ctx = SyncContext {
+            drive: &drive,
+            access_token: "token",
+            db_path: &db_path,
+            state_path: &state_path,
+            swap_guard: &guard,
+        };
+
+        sync_now(&ctx).unwrap(); // bootstrap upload
+        assert_eq!(guard.call_count(), 0);
+
+        let outcome = sync_now(&ctx).unwrap(); // no-op: 何も変わっていない
+        assert_eq!(outcome, SyncOutcome::NoOp);
+        assert_eq!(guard.call_count(), 0);
+
+        make_local_db(dir.path(), "v2-changed-locally");
+        let outcome = sync_now(&ctx).unwrap(); // upload-only: ローカルのみ変化
+        assert_eq!(outcome, SyncOutcome::Uploaded);
+        assert_eq!(guard.call_count(), 0, "an upload-only sync must never close the shared db connection");
     }
 }

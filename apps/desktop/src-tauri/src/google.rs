@@ -2,7 +2,7 @@ use areitu_google::auth::{client_credentials_from_env, AuthStatus, GoogleAuth, S
 use areitu_google::drive::DriveClient;
 use areitu_google::keychain::KeyringStore;
 use areitu_google::oauth::TokenClient;
-use areitu_google::sync::{sync_now, SyncContext, SyncOutcome};
+use areitu_google::sync::{sync_now, DbSwapGuard, SyncContext, SyncOutcome};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -46,11 +46,30 @@ pub fn google_status() -> Result<String, String> {
     })
 }
 
-/// Drive 同期の唯一の入口。`sync_lock` を最初に取り、そのロックを保持したまま
-/// （その内側でのみ）`with_db_closed` が `conn` のロックを取る。ロック順序を
-/// 逆にしてはならない — ポーリングスレッド・トレイの「今すぐ同期」・
-/// `sync_now` コマンドが握る `sync_lock` と衝突すると、写真/カレンダー同期が
-/// 書き込み中に DB ファイルの入れ替えが走ってしまう。
+/// `areitu_google::sync::DbSwapGuard` をデスクトップアプリの共有 DB コネクション
+/// に対して実装するアダプタ。`sync_now` はダウンロード経路で実際にファイルを
+/// 入れ替える瞬間だけこれを呼ぶので、トークン取得・Drive の list/upload/download・
+/// ハッシュ計算の間は `conn` を開けたままにでき、`AppState.conn` をロックする
+/// UI コマンド（`list_places` 等）が Drive 同期のネットワーク往復の間ずっと
+/// ブロックされることがなくなる。
+struct ConnSwapGuard<'a> {
+    conn: &'a Mutex<Connection>,
+    db_path: &'a Path,
+}
+
+impl DbSwapGuard for ConnSwapGuard<'_> {
+    fn with_db_closed(&self, f: &mut dyn FnMut() -> areitu_google::Result<()>) -> areitu_google::Result<()> {
+        with_db_closed(self.conn, self.db_path, || f().map_err(|e| e.to_string()))
+            .map_err(areitu_google::Error::Invalid)
+    }
+}
+
+/// Drive 同期の唯一の入口。`sync_lock` を最初に取り、そのロックを関数全体で
+/// 保持したまま `sync_now` を呼ぶ。共有コネクション（`conn`）は
+/// `ConnSwapGuard` 経由で `swap_db_files` の間だけ閉じられるので、ロック順序
+/// （sync_lock → conn）はこれまでと変わらない — ポーリングスレッド・トレイの
+/// 「今すぐ同期」・`sync_now` コマンドが握る `sync_lock` と衝突すると、写真/
+/// カレンダー同期が書き込み中に DB ファイルの入れ替えが走ってしまう。
 pub fn drive_sync_locked(
     sync_lock: &Mutex<()>,
     conn: &Mutex<Connection>,
@@ -62,20 +81,20 @@ pub fn drive_sync_locked(
     let access_token = auth.access_token().map_err(|e| e.to_string())?;
     let drive = DriveClient::new().map_err(|e| e.to_string())?;
     let (db_path, state_path) = (PathBuf::from(db_path), PathBuf::from(state_path));
-    with_db_closed(conn, &db_path, || {
-        let outcome = sync_now(&SyncContext {
-            drive: &drive,
-            access_token: &access_token,
-            db_path: &db_path,
-            state_path: &state_path,
-        })
-        .map_err(|e| e.to_string())?;
-        Ok(match outcome {
-            SyncOutcome::NoOp => "no_op".to_owned(),
-            SyncOutcome::Uploaded => "uploaded".to_owned(),
-            SyncOutcome::Downloaded => "downloaded".to_owned(),
-            SyncOutcome::Conflict { conflict_backup_name } => format!("conflict:{conflict_backup_name}"),
-        })
+    let swap_guard = ConnSwapGuard { conn, db_path: &db_path };
+    let outcome = sync_now(&SyncContext {
+        drive: &drive,
+        access_token: &access_token,
+        db_path: &db_path,
+        state_path: &state_path,
+        swap_guard: &swap_guard,
+    })
+    .map_err(|e| e.to_string())?;
+    Ok(match outcome {
+        SyncOutcome::NoOp => "no_op".to_owned(),
+        SyncOutcome::Uploaded => "uploaded".to_owned(),
+        SyncOutcome::Downloaded => "downloaded".to_owned(),
+        SyncOutcome::Conflict { conflict_backup_name } => format!("conflict:{conflict_backup_name}"),
     })
 }
 
