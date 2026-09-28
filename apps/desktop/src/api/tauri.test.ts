@@ -6,8 +6,12 @@ import {
   googleSignIn,
   googleSignOut,
   googleStatus,
+  listPlaces,
+  renamePlace,
   saveSettings,
   setupCompleted,
+  syncNow,
+  visitsOf,
 } from "./tauri";
 import type { Settings } from "./types";
 
@@ -89,5 +93,44 @@ describe("tauri api layer", () => {
     };
     await saveSettings(input);
     expect(spy).toHaveBeenCalledWith("save_settings", { settings: input });
+  });
+
+  it("listPlaces invokes list_places with sort and a trimmed keyword", async () => {
+    const spy = vi.spyOn(core, "invoke").mockResolvedValue([]);
+    await listPlaces("recent", "カフェ");
+    expect(spy).toHaveBeenCalledWith("list_places", { sort: "recent", keyword: "カフェ" });
+  });
+
+  it("listPlaces sends null keyword when the input is blank", async () => {
+    const spy = vi.spyOn(core, "invoke").mockResolvedValue([]);
+    await listPlaces("count", "   ");
+    expect(spy).toHaveBeenCalledWith("list_places", { sort: "count", keyword: null });
+  });
+
+  it("visitsOf invokes visits_of with placeId", async () => {
+    const spy = vi.spyOn(core, "invoke").mockResolvedValue([]);
+    await visitsOf(42);
+    expect(spy).toHaveBeenCalledWith("visits_of", { placeId: 42 });
+  });
+
+  it("renamePlace invokes rename_place with placeId and name", async () => {
+    const spy = vi.spyOn(core, "invoke").mockResolvedValue(42);
+    await expect(renamePlace(42, "新しい店名")).resolves.toBe(42);
+    expect(spy).toHaveBeenCalledWith("rename_place", { placeId: 42, name: "新しい店名" });
+  });
+
+  it("syncNow invokes sync_now with no arguments", async () => {
+    const summary = {
+      scanned: 1,
+      scanErrors: [],
+      visitsCreated: 1,
+      resolveFailed: 0,
+      calendarSynced: 0,
+      calendarRemoved: 0,
+      calendarErrors: [],
+    };
+    const spy = vi.spyOn(core, "invoke").mockResolvedValue(summary);
+    await expect(syncNow()).resolves.toEqual(summary);
+    expect(spy).toHaveBeenCalledWith("sync_now");
   });
 });
