@@ -60,7 +60,7 @@ impl<S: crate::keychain::TokenStore, B: BrowserOpener> GoogleAuth<S, B> {
         self.store.clear_refresh_token()
     }
 
-    pub fn sign_in(&self) -> crate::Result<()> {
+    pub fn sign_in(&self, scope: &str) -> crate::Result<()> {
         let (listener, port) = crate::loopback::bind_loopback()?;
         let redirect_uri = format!("http://127.0.0.1:{port}/callback");
         let pkce = crate::oauth::generate_pkce();
@@ -70,7 +70,7 @@ impl<S: crate::keychain::TokenStore, B: BrowserOpener> GoogleAuth<S, B> {
             &crate::oauth::AuthorizeUrlParams {
                 client_id: &self.creds.client_id,
                 redirect_uri: &redirect_uri,
-                scope: crate::SCOPE_DRIVE_APPDATA,
+                scope,
                 state: &state,
                 code_challenge: &pkce.challenge,
             },
@@ -166,7 +166,7 @@ mod tests {
 
         // sign_in はブラウザ起動後にループバックの応答を待ち続けるので、
         // 別スレッドでテストが「ユーザーの認可完了」を模したリダイレクトを送る。
-        let handle = std::thread::spawn(move || auth.sign_in().map(|()| auth));
+        let handle = std::thread::spawn(move || auth.sign_in(crate::SCOPE_DRIVE_APPDATA).map(|()| auth));
         let mut fired = false;
         for _ in 0..100 {
             std::thread::sleep(Duration::from_millis(20));
@@ -212,7 +212,7 @@ mod tests {
             crate::oauth::TokenClient::new().unwrap().with_base_url(&token_server.base_url()),
             test_creds(),
         );
-        let handle = std::thread::spawn(move || auth.sign_in());
+        let handle = std::thread::spawn(move || auth.sign_in(crate::SCOPE_DRIVE_APPDATA));
         for _ in 0..100 {
             std::thread::sleep(Duration::from_millis(20));
             if let Some(url) = browser_url.lock().unwrap().clone() {
@@ -230,5 +230,46 @@ mod tests {
         }
         let err = handle.join().unwrap().unwrap_err();
         assert!(matches!(err, crate::Error::OAuth(_)));
+    }
+
+    #[test]
+    fn sign_in_requests_the_scope_it_is_given() {
+        let token_server = MockServer::start();
+        token_server.mock(|when, then| {
+            when.method(httpmock::Method::POST).path("/token");
+            then.status(200).json_body(serde_json::json!({
+                "access_token": "access-1",
+                "expires_in": 3600,
+                "refresh_token": "refresh-1",
+                "scope": format!("{} {}", crate::SCOPE_DRIVE_APPDATA, crate::SCOPE_CALENDAR_READONLY),
+                "token_type": "Bearer"
+            }));
+        });
+        let browser_url = Arc::new(Mutex::new(None));
+        let auth = GoogleAuth::new(
+            InMemoryStore::new(),
+            RecordingBrowser(browser_url.clone()),
+            crate::oauth::TokenClient::new().unwrap().with_base_url(&token_server.base_url()),
+            test_creds(),
+        );
+        let combined_scope = format!("{} {}", crate::SCOPE_DRIVE_APPDATA, crate::SCOPE_CALENDAR_READONLY);
+        let handle = std::thread::spawn(move || auth.sign_in(&combined_scope));
+        for _ in 0..100 {
+            std::thread::sleep(Duration::from_millis(20));
+            if let Some(url) = browser_url.lock().unwrap().clone() {
+                let parsed = url::Url::parse(&url).unwrap();
+                let pairs: std::collections::HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+                assert_eq!(pairs.get("scope").unwrap(), &format!("{} {}", crate::SCOPE_DRIVE_APPDATA, crate::SCOPE_CALENDAR_READONLY));
+                let port: u16 = url::Url::parse(pairs.get("redirect_uri").unwrap()).unwrap().port().unwrap();
+                let state = pairs.get("state").unwrap().clone();
+                let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+                let req = format!("GET /callback?code=auth-code-1&state={state} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+                stream.write_all(req.as_bytes()).unwrap();
+                let mut discard = [0u8; 512];
+                let _ = stream.read(&mut discard);
+                break;
+            }
+        }
+        handle.join().unwrap().unwrap();
     }
 }
