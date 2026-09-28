@@ -1,13 +1,42 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { SearchListScreen } from "./screens/SearchListScreen";
 import { PlaceDetailScreen } from "./screens/PlaceDetailScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
+import { OnboardingScreen } from "./screens/OnboardingScreen";
+import { setupCompleted } from "./api/tauri";
 import type { Place } from "./api/types";
 
 type View = { kind: "list" } | { kind: "detail"; place: Place } | { kind: "settings" };
 
 export default function App() {
+  const [needsOnboarding, setNeedsOnboarding] = useState<boolean | null>(null);
   const [view, setView] = useState<View>({ kind: "list" });
+
+  useEffect(() => {
+    let cancelled = false;
+    setupCompleted()
+      .then((completed) => {
+        if (!cancelled) setNeedsOnboarding(!completed);
+      })
+      .catch(() => {
+        if (!cancelled) setNeedsOnboarding(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (needsOnboarding === null) {
+    return (
+      <div role="status" className="flex min-h-screen items-center justify-center bg-slate-100 text-sm text-slate-500">
+        読み込み中…
+      </div>
+    );
+  }
+
+  if (needsOnboarding) {
+    return <OnboardingScreen onFinish={() => setNeedsOnboarding(false)} />;
+  }
 
   if (view.kind === "settings") {
     return <SettingsScreen onBack={() => setView({ kind: "list" })} />;
