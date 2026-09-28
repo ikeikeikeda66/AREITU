@@ -1,5 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Place, SaveSettingsInput, Settings, SortMode, SyncSummary, Visit } from "./types";
+import type {
+  DriveSyncOutcome,
+  GoogleStatus,
+  Place,
+  SaveSettingsInput,
+  Settings,
+  SortMode,
+  SyncSummary,
+  Visit,
+} from "./types";
 
 export async function listPlaces(sort: SortMode, keyword: string): Promise<Place[]> {
   const trimmed = keyword.trim();
@@ -24,4 +33,24 @@ export async function getSettings(): Promise<Settings> {
 
 export async function saveSettings(settings: SaveSettingsInput): Promise<void> {
   return invoke<void>("save_settings", { settings });
+}
+
+export async function googleSignIn(): Promise<void> {
+  return invoke<void>("google_sign_in");
+}
+
+export async function googleSignOut(): Promise<void> {
+  return invoke<void>("google_sign_out");
+}
+
+export async function googleStatus(): Promise<GoogleStatus> {
+  return invoke<GoogleStatus>("google_status");
+}
+
+export async function driveSyncNow(): Promise<DriveSyncOutcome> {
+  return invoke<DriveSyncOutcome>("drive_sync_now");
+}
+
+export async function setupCompleted(): Promise<boolean> {
+  return invoke<boolean>("setup_completed");
 }

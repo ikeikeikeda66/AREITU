@@ -57,3 +57,6 @@ export interface SaveSettingsInput {
   geminiApiKey: string | null;
   googlePlacesApiKey: string | null;
 }
+
+export type GoogleStatus = "signed_in" | "signed_out";
+export type DriveSyncOutcome = "no_op" | "uploaded" | "downloaded" | string;
