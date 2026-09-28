@@ -29,7 +29,6 @@ fn build_auth() -> Result<GoogleAuth<KeyringStore, SystemBrowser>, String> {
     Ok(GoogleAuth::new(KeyringStore, SystemBrowser, token_client, creds))
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 const CALENDAR_ID: &str = "primary";
 
 pub fn calendar_scope_for(config: &AppConfig) -> String {
@@ -44,7 +43,6 @@ pub fn calendar_scope_for(config: &AppConfig) -> String {
 /// サインインしていない・クライアント資格情報が未設定などの理由でアクセストークンが
 /// 取れない場合も、エラーを `summary.errors` に積んで返すだけで、呼び出し元の
 /// 写真同期・visit 構築は止めない。
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn ingest_calendar(conn: &Connection, config: &AppConfig, calendar_state_path: &Path) -> CalendarIngestSummary {
     let mut summary = CalendarIngestSummary::default();
     if !config.calendar_enabled {
@@ -178,7 +176,6 @@ pub fn drive_sync_now(app: AppHandle) -> Result<String, String> {
     drive_sync_locked(&state.sync_lock, &state.conn, &db_path, &state_path)
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Default, Clone, PartialEq, serde::Serialize)]
 pub struct CalendarIngestSummary {
     pub events_synced: usize,
@@ -189,7 +186,6 @@ pub struct CalendarIngestSummary {
 /// カレンダーの1同期サイクル分のページ本文を raw_logs に反映する純粋なロジック。
 /// Google 認証・アクセストークン取得・状態ファイルの読み書きは呼び出し元（`ingest_calendar`）
 /// の責務とし、ここでは渡された `api`/`access_token`/`state` だけを使う。
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn ingest_calendar_page_bodies(
     conn: &Connection,
     api: &dyn areitu_google::calendar::CalendarApi,

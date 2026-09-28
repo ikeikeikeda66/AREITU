@@ -17,6 +17,9 @@ export interface SyncSummary {
   scanErrors: string[];
   visitsCreated: number;
   resolveFailed: number;
+  calendarSynced: number;
+  calendarRemoved: number;
+  calendarErrors: string[];
 }
 
 export type LlmProvider = "none" | "ollama" | "openai" | "gemini";

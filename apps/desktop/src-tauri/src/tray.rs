@@ -27,6 +27,7 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                     let _ = crate::sync::sync_on_own_connection_locked(
                         &state.sync_lock,
                         &state.db_path,
+                        &state.calendar_state_path,
                         &config,
                         &crate::config::KeyringSecretStore,
                     );

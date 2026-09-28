@@ -36,7 +36,7 @@ pub fn sync_now(state: State<AppState>) -> Result<SyncSummary, String> {
     // AppState.conn を保持したままネットワークを伴う同期を行うと、その間 UI コマンドが
     // すべてブロックされるため、同期専用の接続を別途開いて実行する。sync_lock は
     // Drive 同期（drive_sync_now・ポーリングサイクル末尾）との相互排除のために取る。
-    sync_on_own_connection_locked(&state.sync_lock, &state.db_path, &config, &KeyringSecretStore)
+    sync_on_own_connection_locked(&state.sync_lock, &state.db_path, &state.calendar_state_path, &config, &KeyringSecretStore)
 }
 
 #[derive(serde::Serialize)]
