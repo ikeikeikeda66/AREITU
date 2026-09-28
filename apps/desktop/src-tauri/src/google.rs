@@ -6,7 +6,9 @@ use areitu_google::sync::{sync_now, DbSwapGuard, SyncContext, SyncOutcome};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, State};
+
+use crate::config::AppConfig;
 
 /// Closes the shared connection while `f` runs so `f` may replace the DB file, then reopens it.
 pub fn with_db_closed<T>(
@@ -27,11 +29,75 @@ fn build_auth() -> Result<GoogleAuth<KeyringStore, SystemBrowser>, String> {
     Ok(GoogleAuth::new(KeyringStore, SystemBrowser, token_client, creds))
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
+const CALENDAR_ID: &str = "primary";
+
+pub fn calendar_scope_for(config: &AppConfig) -> String {
+    if config.calendar_enabled {
+        format!("{} {}", areitu_google::SCOPE_DRIVE_APPDATA, areitu_google::SCOPE_CALENDAR_READONLY)
+    } else {
+        areitu_google::SCOPE_DRIVE_APPDATA.to_owned()
+    }
+}
+
+/// カレンダー取り込みの唯一の入口。`config.calendar_enabled` が false なら何もしない。
+/// サインインしていない・クライアント資格情報が未設定などの理由でアクセストークンが
+/// 取れない場合も、エラーを `summary.errors` に積んで返すだけで、呼び出し元の
+/// 写真同期・visit 構築は止めない。
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn ingest_calendar(conn: &Connection, config: &AppConfig, calendar_state_path: &Path) -> CalendarIngestSummary {
+    let mut summary = CalendarIngestSummary::default();
+    if !config.calendar_enabled {
+        return summary;
+    }
+    let auth = match build_auth() {
+        Ok(a) => a,
+        Err(e) => {
+            summary.errors.push(e);
+            return summary;
+        }
+    };
+    let access_token = match auth.access_token() {
+        Ok(t) => t,
+        Err(e) => {
+            summary.errors.push(format!("Google カレンダーに接続できません: {e}"));
+            return summary;
+        }
+    };
+    let client = match areitu_google::calendar::CalendarClient::new() {
+        Ok(c) => c,
+        Err(e) => {
+            summary.errors.push(e.to_string());
+            return summary;
+        }
+    };
+    let mut state = match areitu_google::state::load_calendar_state(calendar_state_path) {
+        Ok(s) => s,
+        Err(e) => {
+            summary.errors.push(e.to_string());
+            return summary;
+        }
+    };
+
+    summary = ingest_calendar_page_bodies(conn, &client, &access_token, CALENDAR_ID, &mut state);
+    if let Err(e) = areitu_google::state::save_calendar_state(calendar_state_path, &state) {
+        summary.errors.push(e.to_string());
+    }
+    summary
+}
+
+/// ブラウザでの認可完了までブロックするため、`spawn_blocking` で Tauri の
+/// 非同期ランタイム上のワーカースレッドに逃がす。こうしないと呼び出し中
+/// フロントエンドの他の `invoke` 呼び出しがすべて詰まってしまう。
 #[tauri::command]
-pub fn google_sign_in() -> Result<(), String> {
-    build_auth()?
-        .sign_in(areitu_google::SCOPE_DRIVE_APPDATA)
-        .map_err(|e| e.to_string())
+pub async fn google_sign_in(state: State<'_, crate::AppState>) -> Result<(), String> {
+    let config = crate::config::load_config(&state.config_path);
+    tauri::async_runtime::spawn_blocking(move || {
+        let scope = calendar_scope_for(&config);
+        build_auth()?.sign_in(&scope).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -256,6 +322,43 @@ mod tests {
             // 解放後は（build_auth が env 変数なしで即座に失敗するので）速やかに完了する。
             rx.recv_timeout(Duration::from_secs(5)).expect("drive_sync_locked never completed after sync_lock was released");
         });
+    }
+
+    #[test]
+    fn calendar_scope_is_drive_only_when_calendar_import_is_disabled() {
+        let config = crate::config::AppConfig { calendar_enabled: false, ..crate::config::AppConfig::default() };
+        assert_eq!(calendar_scope_for(&config), areitu_google::SCOPE_DRIVE_APPDATA);
+    }
+
+    #[test]
+    fn calendar_scope_adds_calendar_readonly_when_enabled() {
+        let config = crate::config::AppConfig { calendar_enabled: true, ..crate::config::AppConfig::default() };
+        assert_eq!(
+            calendar_scope_for(&config),
+            format!("{} {}", areitu_google::SCOPE_DRIVE_APPDATA, areitu_google::SCOPE_CALENDAR_READONLY)
+        );
+    }
+
+    #[test]
+    fn ingest_calendar_is_a_silent_noop_when_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = areitu_core::db::open_in_memory().unwrap();
+        let config = crate::config::AppConfig { calendar_enabled: false, ..crate::config::AppConfig::default() };
+        let summary = ingest_calendar(&c, &config, &dir.path().join("google-calendar-state.json"));
+        assert_eq!(summary, CalendarIngestSummary::default());
+    }
+
+    #[test]
+    fn ingest_calendar_enabled_without_client_credentials_reports_an_error_not_a_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = areitu_core::db::open_in_memory().unwrap();
+        let config = crate::config::AppConfig { calendar_enabled: true, ..crate::config::AppConfig::default() };
+        // AREITU_GOOGLE_CLIENT_ID / AREITU_GOOGLE_CLIENT_SECRET はビルド時の
+        // option_env! で埋め込まれるため、このテスト環境で未設定なら build_auth() が
+        // 即座に失敗する（drive_sync_blocks_until_sync_lock_is_released と同じ前提）。
+        let summary = ingest_calendar(&c, &config, &dir.path().join("google-calendar-state.json"));
+        assert!(!summary.errors.is_empty());
+        assert_eq!(summary.events_synced, 0);
     }
 }
 
