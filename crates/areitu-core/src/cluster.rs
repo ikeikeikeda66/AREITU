@@ -27,6 +27,7 @@ pub fn cluster(logs: &[(i64, RawLog)]) -> Vec<VisitCandidate> {
     let mut out: Vec<VisitCandidate> = Vec::new();
     for (id, l, p) in points {
         let end = l.ended_at.unwrap_or(l.occurred_at);
+        let hints = text_hints(&l.text);
         if let Some(c) = out.last_mut() {
             let near = haversine_m((c.lat, c.lon), p) <= RADIUS_M;
             let soon = l.occurred_at - c.ended_at <= Duration::minutes(MAX_GAP_MINUTES);
@@ -36,6 +37,7 @@ pub fn cluster(logs: &[(i64, RawLog)]) -> Vec<VisitCandidate> {
                 c.lon = (c.lon * n + p.1) / (n + 1.0);
                 c.ended_at = c.ended_at.max(end);
                 c.log_ids.push(id);
+                c.hints.extend(hints);
                 continue;
             }
         }
@@ -45,11 +47,19 @@ pub fn cluster(logs: &[(i64, RawLog)]) -> Vec<VisitCandidate> {
             lat: p.0,
             lon: p.1,
             log_ids: vec![id],
-            hints: Vec::new(),
+            hints,
         });
     }
     attach_calendar(&mut out, logs);
     out
+}
+
+/// `text` を、既存の `attach_calendar` と同じ「改行区切り・トリム・空行除去」で
+/// ヒントの列に変換する。写真は `text` を持たないため影響を受けない。
+fn text_hints(text: &Option<String>) -> Vec<String> {
+    text.as_deref()
+        .map(|t| t.lines().map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect())
+        .unwrap_or_default()
 }
 
 fn attach_calendar(cands: &mut [VisitCandidate], logs: &[(i64, RawLog)]) {
@@ -60,11 +70,7 @@ fn attach_calendar(cands: &mut [VisitCandidate], logs: &[(i64, RawLog)]) {
         let mut assigned = false;
         for c in cands.iter_mut() {
             if start <= c.ended_at + margin && end >= c.started_at - margin {
-                if let Some(text) = &l.text {
-                    c.hints.extend(
-                        text.lines().map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned),
-                    );
-                }
+                c.hints.extend(text_hints(&l.text));
                 if !assigned {
                     c.log_ids.push(*id);
                     assigned = true;
@@ -169,5 +175,34 @@ mod tests {
             event(9, "2026-09-01 15:00", "2026-09-01 16:00", "遠い"),
         ]);
         assert_eq!(v[0].hints, vec!["近い"]);
+    }
+
+    fn timeline(id: i64, from: &str, to: &str, lat: f64, lon: f64, name: &str) -> (i64, RawLog) {
+        (id, RawLog {
+            source: Source::Timeline,
+            source_id: format!("t{id}"),
+            occurred_at: t(from),
+            ended_at: Some(t(to)),
+            lat: Some(lat),
+            lon: Some(lon),
+            text: Some(name.into()),
+        })
+    }
+
+    #[test]
+    fn a_log_with_text_seeds_its_own_cluster_hint() {
+        let v = cluster(&[timeline(1, "2026-09-01 12:00", "2026-09-01 12:30", CAFE.0, CAFE.1, "カフェ丸の内")]);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].hints, vec!["カフェ丸の内".to_owned()]);
+    }
+
+    #[test]
+    fn joining_an_existing_cluster_appends_its_text_as_a_hint_too() {
+        let v = cluster(&[
+            photo(1, "2026-09-01 12:00", CAFE.0, CAFE.1),
+            timeline(2, "2026-09-01 12:10", "2026-09-01 12:20", CAFE.0, CAFE.1, "カフェ丸の内"),
+        ]);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].hints, vec!["カフェ丸の内".to_owned()]);
     }
 }
