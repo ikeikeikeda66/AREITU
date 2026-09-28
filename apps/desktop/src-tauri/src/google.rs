@@ -338,18 +338,32 @@ mod ingest_calendar_page_bodies_tests {
     fn sync_token_expired_clears_token_and_retries_full_sync_once() {
         let c = areitu_core::db::open_in_memory().unwrap();
         let mut state = CalendarSyncState { sync_token: Some("stale-token".to_owned()) };
+        // The retry page deliberately carries no next_sync_token. If it did, the final
+        // `state.sync_token = fetched.next_sync_token` overwrite at the end of
+        // `ingest_calendar_page_bodies` would mask whether the stale token was actually
+        // cleared before the retry — it would overwrite state.sync_token either way,
+        // regardless of what happened in between. With no fresh token to fall back on,
+        // the only way `state.sync_token` ends up `None` is if the 410 branch itself
+        // cleared it before issuing the retry, which is the behavior this test exists
+        // to prove (and which a `seen_sync_tokens` check alone cannot: the retry call
+        // passes a literal `None`, not `state.sync_token.as_deref()`, so it stays
+        // `None` even if the clearing line is mutated away).
         let api = FakeCalendarApi::new(vec![
             Err(areitu_google::Error::SyncTokenExpired),
             Ok(EventsPage {
                 body: events_json("e1", "confirmed"),
                 next_page_token: None,
-                next_sync_token: Some("fresh-token".to_owned()),
+                next_sync_token: None,
             }),
         ]);
         let summary = ingest_calendar_page_bodies(&c, &api, "access-token", "primary", &mut state);
         assert_eq!(summary.events_synced, 1);
         assert!(summary.errors.is_empty(), "{:?}", summary.errors);
-        assert_eq!(state.sync_token.as_deref(), Some("fresh-token"));
+        assert_eq!(
+            state.sync_token, None,
+            "the stale sync_token must be cleared before the full-sync retry, and must stay \
+             cleared (not resurface) when the retry itself doesn't hand back a fresh token"
+        );
         let seen = api.seen_sync_tokens.lock().unwrap();
         assert_eq!(seen.len(), 2, "expected one failed attempt with the stale token and one full-sync retry");
         assert_eq!(seen[0].as_deref(), Some("stale-token"));
