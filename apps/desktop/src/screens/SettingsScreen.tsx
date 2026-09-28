@@ -1,5 +1,14 @@
 import { useEffect, useState } from "react";
-import { driveSyncNow, getSettings, googleSignIn, googleSignOut, googleStatus, saveSettings } from "../api/tauri";
+import { open } from "@tauri-apps/plugin-dialog";
+import {
+  driveSyncNow,
+  getSettings,
+  googleSignIn,
+  googleSignOut,
+  googleStatus,
+  importTimelineFile,
+  saveSettings,
+} from "../api/tauri";
 import type { GoogleStatus, KeyStatus, LlmProvider, Settings } from "../api/types";
 
 function keyStatusLabel(status: KeyStatus): string {
@@ -44,6 +53,9 @@ export function SettingsScreen({ onBack }: Props) {
   const [googleBusy, setGoogleBusy] = useState(false);
   const [googleError, setGoogleError] = useState<string | null>(null);
   const [driveSyncResult, setDriveSyncResult] = useState<string | null>(null);
+  const [timelineImporting, setTimelineImporting] = useState(false);
+  const [timelineImportResult, setTimelineImportResult] = useState<string | null>(null);
+  const [timelineImportError, setTimelineImportError] = useState<string | null>(null);
 
   useEffect(() => {
     getSettings().then(setSettings);
@@ -113,6 +125,26 @@ export function SettingsScreen({ onBack }: Props) {
       setGoogleError(String(e));
     } finally {
       setGoogleBusy(false);
+    }
+  }
+
+  async function handleImportTimeline() {
+    setTimelineImportError(null);
+    setTimelineImporting(true);
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "Google Timeline / Takeout JSON", extensions: ["json"] }],
+      });
+      if (selected === null || Array.isArray(selected)) {
+        return;
+      }
+      const count = await importTimelineFile(selected);
+      setTimelineImportResult(`${count} 件の訪問を取り込みました`);
+    } catch (e) {
+      setTimelineImportError(String(e));
+    } finally {
+      setTimelineImporting(false);
     }
   }
 
@@ -326,6 +358,23 @@ export function SettingsScreen({ onBack }: Props) {
         </div>
         {driveSyncResult !== null && <p className="text-sm text-slate-600">{driveSyncResult}</p>}
         {googleError !== null && <p className="text-sm text-red-600">{googleError}</p>}
+      </section>
+
+      <section className="flex flex-col gap-2">
+        <h2 className="text-lg font-semibold text-slate-900">データの取り込み</h2>
+        <p className="text-sm text-slate-500">
+          Google タイムラインのエクスポート（Timeline.json、または Google Takeout の位置情報履歴）を読み込みます。
+        </p>
+        <button
+          type="button"
+          onClick={handleImportTimeline}
+          disabled={timelineImporting}
+          className="self-start rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+        >
+          Google タイムラインを取り込む
+        </button>
+        {timelineImportResult !== null && <p className="text-sm text-slate-600">{timelineImportResult}</p>}
+        {timelineImportError !== null && <p className="text-sm text-red-600">{timelineImportError}</p>}
       </section>
 
       <div className="flex items-center gap-3">

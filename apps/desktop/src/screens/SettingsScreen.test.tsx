@@ -1,8 +1,11 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import * as dialog from "@tauri-apps/plugin-dialog";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SettingsScreen } from "./SettingsScreen";
 import * as tauriApi from "../api/tauri";
 import type { Settings } from "../api/types";
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
 const baseSettings: Settings = {
   watchedDirs: [],
@@ -22,6 +25,7 @@ const baseSettings: Settings = {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.mocked(dialog.open).mockReset();
 });
 
 describe("SettingsScreen — Google アカウント", () => {
@@ -80,5 +84,68 @@ describe("SettingsScreen — Google アカウント", () => {
     reject("sign-in timed out");
     expect(await screen.findByText("sign-in timed out")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Google でサインイン" })).toBeEnabled();
+  });
+});
+
+describe("SettingsScreen — Google タイムライン取り込み", () => {
+  const importButton = () => screen.findByRole("button", { name: "Google タイムラインを取り込む" });
+
+  it("opens a file picker and shows how many visits were imported", async () => {
+    vi.spyOn(tauriApi, "getSettings").mockResolvedValue(baseSettings);
+    vi.spyOn(tauriApi, "googleStatus").mockResolvedValue("signed_out");
+    vi.mocked(dialog.open).mockResolvedValue("/Users/me/Timeline.json");
+    const importFile = vi.spyOn(tauriApi, "importTimelineFile").mockResolvedValue(5);
+    render(<SettingsScreen onBack={vi.fn()} />);
+
+    fireEvent.click(await importButton());
+    await waitFor(() => expect(importFile).toHaveBeenCalledWith("/Users/me/Timeline.json"));
+    expect(await screen.findByText("5 件の訪問を取り込みました")).toBeInTheDocument();
+  });
+
+  it("does nothing when the file picker is cancelled", async () => {
+    vi.spyOn(tauriApi, "getSettings").mockResolvedValue(baseSettings);
+    vi.spyOn(tauriApi, "googleStatus").mockResolvedValue("signed_out");
+    vi.mocked(dialog.open).mockResolvedValue(null);
+    const importFile = vi.spyOn(tauriApi, "importTimelineFile");
+    render(<SettingsScreen onBack={vi.fn()} />);
+
+    fireEvent.click(await importButton());
+    await waitFor(() => expect(dialog.open).toHaveBeenCalledTimes(1));
+    expect(importFile).not.toHaveBeenCalled();
+    expect(screen.queryByText(/取り込みました/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Google タイムラインを取り込む" })).toBeEnabled();
+  });
+
+  it("shows the error message when the import fails", async () => {
+    vi.spyOn(tauriApi, "getSettings").mockResolvedValue(baseSettings);
+    vi.spyOn(tauriApi, "googleStatus").mockResolvedValue("signed_out");
+    vi.mocked(dialog.open).mockResolvedValue("/Users/me/Timeline.json");
+    vi.spyOn(tauriApi, "importTimelineFile").mockRejectedValue("invalid timeline file");
+    render(<SettingsScreen onBack={vi.fn()} />);
+
+    fireEvent.click(await importButton());
+    expect(await screen.findByText("invalid timeline file")).toBeInTheDocument();
+    expect(screen.queryByText(/取り込みました/)).not.toBeInTheDocument();
+  });
+
+  it("disables the button while importing", async () => {
+    vi.spyOn(tauriApi, "getSettings").mockResolvedValue(baseSettings);
+    vi.spyOn(tauriApi, "googleStatus").mockResolvedValue("signed_out");
+    vi.mocked(dialog.open).mockResolvedValue("/Users/me/Timeline.json");
+    let resolve!: (n: number) => void;
+    vi.spyOn(tauriApi, "importTimelineFile").mockReturnValue(
+      new Promise<number>((r) => {
+        resolve = r;
+      }),
+    );
+    render(<SettingsScreen onBack={vi.fn()} />);
+
+    fireEvent.click(await importButton());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Google タイムラインを取り込む" })).toBeDisabled(),
+    );
+    resolve(2);
+    expect(await screen.findByText("2 件の訪問を取り込みました")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Google タイムラインを取り込む" })).toBeEnabled();
   });
 });
