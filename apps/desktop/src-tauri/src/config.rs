@@ -12,6 +12,7 @@ pub enum LlmProvider {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppConfig {
     pub watched_dirs: Vec<String>,
     pub llm_provider: LlmProvider,
@@ -183,6 +184,32 @@ mod tests {
         let path = dir.path().join("config.json");
         std::fs::write(&path, "not json").unwrap();
         assert_eq!(load_config(&path), AppConfig::default());
+    }
+
+    #[test]
+    fn config_from_before_calendar_enabled_existed_preserves_existing_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        // 現行フィールドすべてを含み、calendar_enabled だけ欠けた古い config.json を模す。
+        std::fs::write(
+            &path,
+            r#"{
+                "watched_dirs": ["/photos"],
+                "llm_provider": "none",
+                "ollama_url": "http://localhost:11434",
+                "ollama_model": "",
+                "openai_model": "gpt-4o-mini",
+                "gemini_model": "gemini-1.5-flash",
+                "google_places_enabled": false,
+                "min_confidence": 0.6,
+                "poll_interval_minutes": 15
+            }"#,
+        )
+        .unwrap();
+        let config = load_config(&path);
+        assert_eq!(config.watched_dirs, vec!["/photos".to_owned()]);
+        assert_eq!(config.poll_interval_minutes, 15);
+        assert!(!config.calendar_enabled);
     }
 
     #[test]
