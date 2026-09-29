@@ -1,4 +1,4 @@
-use chrono::{DateTime, NaiveDateTime};
+use chrono::{DateTime, FixedOffset, Local, NaiveDateTime, Utc};
 use rusqlite::Connection;
 use serde_json::Value;
 use std::path::Path;
@@ -23,8 +23,46 @@ pub struct ParsedTimeline {
     pub skipped: usize,
 }
 
-fn wall_clock(s: &str) -> Option<NaiveDateTime> {
-    DateTime::parse_from_rfc3339(s).ok().map(|d| d.naive_local())
+/// 指定した UTC 時刻における「現地」のオフセットを返す関数。
+/// 本番ではマシンのローカルタイムゾーン、テストでは固定オフセットを渡す。
+pub type LocalOffset<'a> = &'a dyn Fn(DateTime<Utc>) -> FixedOffset;
+
+/// その時刻におけるマシンのローカルオフセット（夏時間を考慮する）。
+pub fn system_local_offset(at: DateTime<Utc>) -> FixedOffset {
+    *at.with_timezone(&Local).offset()
+}
+
+fn utc_to_local_wall_clock(utc: DateTime<Utc>, local: LocalOffset) -> NaiveDateTime {
+    utc.with_timezone(&local(utc)).naive_local()
+}
+
+/// 写真(Exif)・カレンダーは現地の壁時計で保存しているので、それに合わせる。
+/// 明示的な非ゼロオフセット（オンデバイス出力の `+09:00` など）はその時計をそのまま使い、
+/// UTC（`Z` / `+00:00`）は現地の壁時計へ変換する。
+fn wall_clock_with(s: &str, local: LocalOffset) -> Option<NaiveDateTime> {
+    let d = DateTime::parse_from_rfc3339(s).ok()?;
+    if d.offset().local_minus_utc() == 0 {
+        Some(utc_to_local_wall_clock(d.with_timezone(&Utc), local))
+    } else {
+        Some(d.naive_local())
+    }
+}
+
+/// エポックミリ秒は UTC なので現地の壁時計へ変換する。
+fn epoch_ms_wall_clock(ms: i64, local: LocalOffset) -> Option<NaiveDateTime> {
+    DateTime::from_timestamp_millis(ms).map(|utc| utc_to_local_wall_clock(utc, local))
+}
+
+/// `key`（RFC 3339 文字列）を優先し、無ければ `ms_key`（文字列または数値のエポックミリ秒）を読む。
+fn read_time(obj: &Value, key: &str, ms_key: &str, local: LocalOffset) -> Option<NaiveDateTime> {
+    if let Some(v) = obj.get(key) {
+        return wall_clock_with(v.as_str()?, local);
+    }
+    let ms = match obj.get(ms_key)? {
+        Value::String(s) => s.trim().parse::<i64>().ok()?,
+        other => other.as_i64()?,
+    };
+    epoch_ms_wall_clock(ms, local)
 }
 
 /// `"35.681236°, 139.767125°"` と `"geo:35.681236,139.767125"` のどちらも読む。
@@ -40,21 +78,21 @@ fn clean_name(v: Option<&Value>) -> Option<String> {
     v.and_then(Value::as_str).map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
 }
 
-fn on_device_visit(seg: &Value) -> Option<TimelineVisit> {
+fn on_device_visit(seg: &Value, local: LocalOffset) -> Option<TimelineVisit> {
     let candidate = seg.get("visit")?.get("topCandidate")?;
     let (lat, lon) = parse_lat_lng(candidate.get("placeLocation")?.get("latLng")?.as_str()?)?;
-    let start = wall_clock(seg.get("startTime")?.as_str()?)?;
-    let end = wall_clock(seg.get("endTime")?.as_str()?)?;
+    let start = wall_clock_with(seg.get("startTime")?.as_str()?, local)?;
+    let end = wall_clock_with(seg.get("endTime")?.as_str()?, local)?;
     Some(TimelineVisit { lat, lon, start, end, name: clean_name(candidate.get("name")) })
 }
 
-fn takeout_visit(pv: &Value) -> Option<TimelineVisit> {
+fn takeout_visit(pv: &Value, local: LocalOffset) -> Option<TimelineVisit> {
     let loc = pv.get("location")?;
     let lat = loc.get("latitudeE7")?.as_i64()? as f64 / 1e7;
     let lon = loc.get("longitudeE7")?.as_i64()? as f64 / 1e7;
     let duration = pv.get("duration")?;
-    let start = wall_clock(duration.get("startTimestamp")?.as_str()?)?;
-    let end = wall_clock(duration.get("endTimestamp")?.as_str()?)?;
+    let start = read_time(duration, "startTimestamp", "startTimestampMs", local)?;
+    let end = read_time(duration, "endTimestamp", "endTimestampMs", local)?;
     Some(TimelineVisit { lat, lon, start, end, name: clean_name(loc.get("name")) })
 }
 
@@ -64,7 +102,7 @@ fn collect(
     entries: &Value,
     what: &str,
     visit_key: &str,
-    read: fn(&Value) -> Option<TimelineVisit>,
+    read: &dyn Fn(&Value) -> Option<TimelineVisit>,
 ) -> Result<ParsedTimeline> {
     let entries = entries.as_array().ok_or_else(|| Error::Invalid(format!("timeline export: {what} is not an array")))?;
     let mut visits = Vec::new();
@@ -81,16 +119,20 @@ fn collect(
     Ok(ParsedTimeline { visits, skipped })
 }
 
-pub fn parse_timeline_export_counted(json: &str) -> Result<ParsedTimeline> {
+pub fn parse_timeline_export_with(json: &str, local: LocalOffset) -> Result<ParsedTimeline> {
     let value: Value = serde_json::from_str(json)?;
     let obj = value.as_object().ok_or_else(|| Error::Invalid("timeline export is not a JSON object".into()))?;
     if let Some(segments) = obj.get("semanticSegments") {
-        collect(segments, "semanticSegments", "visit", on_device_visit)
+        collect(segments, "semanticSegments", "visit", &|v| on_device_visit(v, local))
     } else if let Some(objects) = obj.get("timelineObjects") {
-        collect(objects, "timelineObjects", "placeVisit", takeout_visit)
+        collect(objects, "timelineObjects", "placeVisit", &|v| takeout_visit(v, local))
     } else {
         Err(Error::Invalid("unrecognized timeline export: expected semanticSegments or timelineObjects".into()))
     }
+}
+
+pub fn parse_timeline_export_counted(json: &str) -> Result<ParsedTimeline> {
+    parse_timeline_export_with(json, &system_local_offset)
 }
 
 pub fn parse_timeline_export(json: &str) -> Result<Vec<TimelineVisit>> {
@@ -214,8 +256,8 @@ mod tests {
         let v = TimelineVisit {
             lat: 35.6812,
             lon: 139.7671,
-            start: wall_clock("2026-09-01T12:00:00+09:00").unwrap(),
-            end: wall_clock("2026-09-01T13:00:00+09:00").unwrap(),
+            start: wall_clock_with("2026-09-01T12:00:00+09:00", &jst).unwrap(),
+            end: wall_clock_with("2026-09-01T13:00:00+09:00", &jst).unwrap(),
             name: Some("カフェ丸の内".to_owned()),
         };
         let log = to_raw_log(&v);
@@ -282,11 +324,61 @@ mod tests {
     }
 
     #[test]
-    fn offset_timestamps_keep_local_wall_clock_time() {
-        let visits = parse_timeline_export(ON_DEVICE_JSON).unwrap();
+    fn on_device_offset_keeps_wall_clock_and_takeout_utc_is_converted_to_local() {
+        let visits = parse_timeline_export_with(ON_DEVICE_JSON, &jst).unwrap().visits;
         assert_eq!(visits[0].start.format("%Y-%m-%d %H:%M").to_string(), "2026-09-01 12:00");
-        let takeout = parse_timeline_export(TAKEOUT_JSON).unwrap();
-        assert_eq!(takeout[0].start.format("%Y-%m-%d %H:%M").to_string(), "2026-09-01 03:00");
+        let takeout = parse_timeline_export_with(TAKEOUT_JSON, &jst).unwrap().visits;
+        assert_eq!(takeout[0].start.format("%Y-%m-%d %H:%M").to_string(), "2026-09-01 12:00");
+    }
+
+    fn jst(_: DateTime<Utc>) -> FixedOffset {
+        FixedOffset::east_opt(9 * 3600).unwrap()
+    }
+
+    fn fmt(t: Option<NaiveDateTime>) -> String {
+        t.expect("timestamp must parse").format("%Y-%m-%d %H:%M").to_string()
+    }
+
+    #[test]
+    fn z_timestamp_is_converted_to_the_local_wall_clock() {
+        assert_eq!(fmt(wall_clock_with("2020-01-05T03:00:00.000Z", &jst)), "2020-01-05 12:00");
+    }
+
+    #[test]
+    fn plus_zero_offset_timestamp_is_converted_to_the_local_wall_clock() {
+        assert_eq!(fmt(wall_clock_with("2020-01-05T03:00:00+00:00", &jst)), "2020-01-05 12:00");
+    }
+
+    #[test]
+    fn explicit_non_zero_offset_keeps_its_own_wall_clock() {
+        assert_eq!(fmt(wall_clock_with("2026-09-01T12:00:00.000+09:00", &jst)), "2026-09-01 12:00");
+        // 現地と異なるオフセットでも、書かれている時計をそのまま使う（calendar と同じ）。
+        assert_eq!(fmt(wall_clock_with("2026-09-01T12:00:00-05:00", &jst)), "2026-09-01 12:00");
+    }
+
+    #[test]
+    fn epoch_milliseconds_are_converted_to_the_local_wall_clock() {
+        // 2020-01-05T03:00:00Z
+        assert_eq!(fmt(epoch_ms_wall_clock(1_578_193_200_000, &jst)), "2020-01-05 12:00");
+    }
+
+    #[test]
+    fn takeout_export_converts_z_and_epoch_ms_timestamps_to_local_time() {
+        let json = r#"{"timelineObjects": [
+          {"placeVisit": {"location": {"latitudeE7": 356812360, "longitudeE7": 1397671250},
+                          "duration": {"startTimestamp": "2020-01-05T03:00:00.000Z", "endTimestamp": "2020-01-05T04:00:00.000Z"}}},
+          {"placeVisit": {"location": {"latitudeE7": 356812360, "longitudeE7": 1397671250},
+                          "duration": {"startTimestampMs": "1578193200000", "endTimestampMs": "1578196800000"}}},
+          {"placeVisit": {"location": {"latitudeE7": 356812360, "longitudeE7": 1397671250},
+                          "duration": {"startTimestampMs": 1578193200000, "endTimestampMs": 1578196800000}}}
+        ]}"#;
+        let parsed = parse_timeline_export_with(json, &jst).unwrap();
+        assert_eq!(parsed.visits.len(), 3);
+        assert_eq!(parsed.skipped, 0);
+        for v in &parsed.visits {
+            assert_eq!(fmt(Some(v.start)), "2020-01-05 12:00");
+            assert_eq!(fmt(Some(v.end)), "2020-01-05 13:00");
+        }
     }
 
     #[test]
