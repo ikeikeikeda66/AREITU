@@ -2,8 +2,13 @@ import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import * as tauriApi from "./api/tauri";
+import { checkForUpdate } from "./api/updater";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
+vi.mock("./api/updater", () => ({
+  checkForUpdate: vi.fn().mockResolvedValue({ available: false }),
+  installUpdateAndRestart: vi.fn(),
+}));
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -37,5 +42,20 @@ describe("App", () => {
     render(<App />);
     expect(await screen.findByText("設定")).toBeInTheDocument();
     expect(screen.queryByText("AREITU へようこそ")).not.toBeInTheDocument();
+  });
+
+  it("shows an update banner when a newer version is available", async () => {
+    vi.spyOn(tauriApi, "setupCompleted").mockResolvedValue(true);
+    vi.spyOn(tauriApi, "listPlaces").mockResolvedValue([]);
+    vi.mocked(checkForUpdate).mockResolvedValueOnce({
+      available: true,
+      // @ts-expect-error テスト用の最小フェイク
+      update: {},
+      version: "9.9.9",
+      notes: null,
+    });
+    render(<App />);
+    expect(await screen.findByText(/9\.9\.9/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "更新して再起動" })).toBeInTheDocument();
   });
 });
