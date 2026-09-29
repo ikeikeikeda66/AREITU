@@ -164,7 +164,13 @@ pub fn spawn_poll_thread(app: AppHandle) {
 
             if let Ok((db_path, state_path)) = crate::google::sync_paths(&app)
                 && let Err(e) =
-                    crate::google::drive_sync_locked(&state.sync_lock, &state.conn, &db_path, &state_path)
+                    crate::google::drive_sync_locked(
+                        &state.sync_lock,
+                        &state.conn,
+                        &db_path,
+                        &state_path,
+                        &state.calendar_state_path,
+                    )
             {
                 eprintln!("drive sync skipped this cycle: {e}");
             }

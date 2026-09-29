@@ -168,6 +168,7 @@ pub fn drive_sync_locked(
     conn: &Mutex<Connection>,
     db_path: &Path,
     state_path: &Path,
+    calendar_state_path: &Path,
 ) -> Result<String, String> {
     let _sync_guard = sync_lock.lock().map_err(|e| e.to_string())?;
     let auth = build_auth()?;
@@ -183,12 +184,30 @@ pub fn drive_sync_locked(
         swap_guard: &swap_guard,
     })
     .map_err(|e| e.to_string())?;
+    // sync_lock を保持したまま行うので、カレンダー同期と状態ファイルを取り合わない。
+    reset_calendar_token_if_db_replaced(&outcome, calendar_state_path)?;
     Ok(match outcome {
         SyncOutcome::NoOp => "no_op".to_owned(),
         SyncOutcome::Uploaded => "uploaded".to_owned(),
         SyncOutcome::Downloaded => "downloaded".to_owned(),
         SyncOutcome::Conflict { conflict_backup_name } => format!("conflict:{conflict_backup_name}"),
     })
+}
+
+/// Drive 同期でローカル DB が他端末のコピーに置き換わった場合、カレンダーの syncToken
+/// （DB の外の JSON にある）は新しい DB に無い予定より先へ進んでいる可能性がある。
+/// そこで DB を置き換えた結果（`Downloaded`）のときだけ sync_token を消し、次のサイクルで
+/// フル同期させる。他の状態フィールド（`last_error` 等）は残す。
+pub fn reset_calendar_token_if_db_replaced(outcome: &SyncOutcome, calendar_state_path: &Path) -> Result<(), String> {
+    if !matches!(outcome, SyncOutcome::Downloaded) {
+        return Ok(());
+    }
+    let mut state = areitu_google::state::load_calendar_state(calendar_state_path).map_err(|e| e.to_string())?;
+    if state.sync_token.is_none() {
+        return Ok(());
+    }
+    state.sync_token = None;
+    areitu_google::state::save_calendar_state(calendar_state_path, &state).map_err(|e| e.to_string())
 }
 
 pub fn sync_paths(app: &AppHandle) -> Result<(PathBuf, PathBuf), String> {
@@ -200,7 +219,7 @@ pub fn sync_paths(app: &AppHandle) -> Result<(PathBuf, PathBuf), String> {
 pub fn drive_sync_now(app: AppHandle) -> Result<String, String> {
     let (db_path, state_path) = sync_paths(&app)?;
     let state = app.state::<crate::AppState>();
-    drive_sync_locked(&state.sync_lock, &state.conn, &db_path, &state_path)
+    drive_sync_locked(&state.sync_lock, &state.conn, &db_path, &state_path, &state.calendar_state_path)
 }
 
 #[derive(Debug, Default, Clone, PartialEq, serde::Serialize)]
@@ -265,7 +284,11 @@ pub fn ingest_calendar_page_bodies(
         }
     }
 
-    if fetched.next_sync_token.is_some() {
+    // 一部の予定の保存・解析に失敗したときはトークンを進めない。進めると失敗した予定が
+    // 二度と取得されなくなるため、古いトークンのまま次のサイクルで再取得する。
+    if summary.errors.is_empty()
+        && fetched.next_sync_token.is_some()
+    {
         state.sync_token = fetched.next_sync_token;
     }
     summary
@@ -330,7 +353,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         std::thread::scope(|scope| {
             scope.spawn(|| {
-                let _ = drive_sync_locked(&sync_lock, &conn, &live, &state_path);
+                let _ = drive_sync_locked(&sync_lock, &conn, &live, &state_path, &dir.path().join("google-calendar-state.json"));
                 tx.send(()).unwrap();
             });
 
@@ -345,6 +368,41 @@ mod tests {
             // 解放後は（build_auth が env 変数なしで即座に失敗するので）速やかに完了する。
             rx.recv_timeout(Duration::from_secs(5)).expect("drive_sync_locked never completed after sync_lock was released");
         });
+    }
+
+    fn state_with_token(path: &Path) {
+        let st = areitu_google::state::CalendarSyncState {
+            sync_token: Some("tok".to_owned()),
+            last_error: Some("old error".to_owned()),
+        };
+        areitu_google::state::save_calendar_state(path, &st).unwrap();
+    }
+
+    #[test]
+    fn downloaded_outcome_clears_calendar_sync_token_but_keeps_other_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("google-calendar-state.json");
+        state_with_token(&path);
+        reset_calendar_token_if_db_replaced(&SyncOutcome::Downloaded, &path).unwrap();
+        let saved = areitu_google::state::load_calendar_state(&path).unwrap();
+        assert_eq!(saved.sync_token, None);
+        assert_eq!(saved.last_error.as_deref(), Some("old error"));
+    }
+
+    #[test]
+    fn outcomes_that_keep_the_local_db_leave_the_calendar_sync_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("google-calendar-state.json");
+        for outcome in [
+            SyncOutcome::NoOp,
+            SyncOutcome::Uploaded,
+            SyncOutcome::Conflict { conflict_backup_name: "b.db".to_owned() },
+        ] {
+            state_with_token(&path);
+            reset_calendar_token_if_db_replaced(&outcome, &path).unwrap();
+            let saved = areitu_google::state::load_calendar_state(&path).unwrap();
+            assert_eq!(saved.sync_token.as_deref(), Some("tok"), "{outcome:?}");
+        }
     }
 
     #[test]
@@ -547,6 +605,26 @@ mod ingest_calendar_page_bodies_tests {
         assert_eq!(seen.len(), 2, "expected one failed attempt with the stale token and one full-sync retry");
         assert_eq!(seen[0].as_deref(), Some("stale-token"));
         assert_eq!(seen[1], None, "the retry after a 410 must not resend the stale sync token");
+    }
+
+    #[test]
+    fn failed_upsert_in_batch_keeps_the_previous_sync_token() {
+        let c = areitu_core::db::open_in_memory().unwrap();
+        // 1件目は正常、2件目は保存（upsert）がトリガーで失敗する。
+        let body = r#"{"items":[
+            {"id":"ok","status":"confirmed","summary":"ランチ","start":{"dateTime":"2026-09-01T12:00:00+09:00"},"end":{"dateTime":"2026-09-01T13:00:00+09:00"}},
+            {"id":"bad","status":"confirmed","summary":"x","start":{"dateTime":"2026-09-01T14:00:00+09:00"},"end":{"dateTime":"2026-09-01T15:00:00+09:00"}}
+        ]}"#;
+        c.execute_batch("CREATE TRIGGER fail_bad BEFORE INSERT ON raw_logs WHEN NEW.source_id = 'bad' BEGIN SELECT RAISE(ABORT, 'boom'); END;").unwrap();
+        let api = FakeCalendarApi::new(vec![Ok(EventsPage {
+            body: body.to_owned(),
+            next_page_token: None,
+            next_sync_token: Some("new-token".to_owned()),
+        })]);
+        let mut state = CalendarSyncState { sync_token: Some("old-token".to_owned()), ..CalendarSyncState::default() };
+        let summary = ingest_calendar_page_bodies(&c, &api, "access-token", "primary", &mut state);
+        assert!(!summary.errors.is_empty(), "the failing event must be reported");
+        assert_eq!(state.sync_token.as_deref(), Some("old-token"));
     }
 
     #[test]
