@@ -26,6 +26,7 @@
   <h2>Data handled</h2>
   <ul>
     <li>Capture time and location (latitude/longitude) read from photos in the folders you specify. The photo files themselves are not sent anywhere.</li>
+    <li>Times, coordinates and place names read from a Google Timeline (Takeout) file that you choose to import in the app. The file itself is only read on your device and is not sent anywhere.</li>
     <li>Visits derived from them (times, coordinates, inferred place names).</li>
     <li>Only if you enable calendar import: your Google Calendar events (title and time range).</li>
   </ul>
@@ -61,7 +62,9 @@
       <strong>LLM place-name inference (disabled by default)</strong>: runs only if you select an LLM in Settings.
       When reverse geocoding yields no facility name, or the name disagrees with a calendar event, the following is
       sent as a prompt: the visit's start and end times, latitude/longitude, the reverse-geocoding address and
-      facility name, and the titles of calendar events in the same time range. The destination depends on your
+      facility name, the titles and locations of calendar events in the same time range, and the
+      place names from imported Timeline entries that belong to the same visit. Timeline place names are sent whenever a
+      Timeline file has been imported, whether or not calendar import is enabled. The destination depends on your
       choice:
       <ul>
         <li>Ollama: the URL you configure (default is the same machine, <code>http://localhost:11434</code>). If you point it at another host, the prompt goes to that host.</li>
@@ -90,7 +93,7 @@
   </p>
   <ul>
     <li>Drive data is used only to sync your own database. Calendar data is used only to infer place names for visits.</li>
-    <li>Google user data is not transferred to the developer or to third parties. The one exception is that, if you enable an LLM as described above, calendar event titles are sent to the LLM destination you chose.</li>
+    <li>Google user data is not transferred to the developer or to third parties. The one exception is that, if you enable an LLM as described above, calendar event titles and locations, and place names from imported Timeline entries, are sent to the LLM destination you chose.</li>
     <li>Google user data is not used for advertising.</li>
     <li>The developer does not read Google user data (the developer has no access to it).</li>
   </ul>

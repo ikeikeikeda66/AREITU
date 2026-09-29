@@ -26,14 +26,14 @@
 - 開発者のサーバーは存在しない。Google ユーザーデータが開発者に送られることはない。
 - `drive.appdata`: `areitu.db`（SQLite）をユーザー自身の Google Drive の appDataFolder にアップロード・ダウンロードする。競合時は同フォルダに `areitu-conflict-<timestamp>.db` を作る。通常の Drive 画面には表示されない。
 - `calendar.readonly`: 予定のタイトルと時間帯を読み取り、同じ時間帯の訪問の場所名を推定する手がかりにする。カレンダーは書き換えない。
-- 例外（プライバシーポリシーに明記済み）: ユーザーが設定で LLM（Ollama / OpenAI / Gemini）を有効にした場合に限り、同じ時間帯のカレンダー予定タイトルが、ユーザーが選んだ LLM の送信先へプロンプトの一部として送られる。既定は無効。
+- 例外（プライバシーポリシーに明記済み）: ユーザーが設定で LLM（Ollama / OpenAI / Gemini）を有効にした場合に限り、同じ時間帯のカレンダー予定タイトル・場所と、ユーザーが取り込んだ Google Timeline ファイル由来の場所名（Google ユーザーデータではないが同じプロンプトに入る）が、ユーザーが選んだ LLM の送信先へプロンプトの一部として送られる。既定は無効。
 - 認証情報の保存: Google のリフレッシュトークンは OS のキーチェーンのみ。`config.json` にはキーを含まない。
 - `areitu.db` を AREITU は暗号化しない（Drive 上は Google の保存時暗号化のみ）。
 
 ## 各スコープの必要性の説明（同意画面の記入用下書き）
 
 - `drive.appdata`: "AREITU keeps a visit-log database file (areitu.db) on the user's device. When the user signs in, this file is uploaded to and downloaded from the appDataFolder of the user's own Google Drive so the same data can be synced between the user's own devices. The folder is hidden from the normal Drive UI and accessible only to this app. If a sync conflict occurs, a backup copy is saved in the same folder."
-- `calendar.readonly`: "Only if the user enables calendar import in Settings, AREITU reads the titles and time ranges of the user's calendar events. They are used as hints to infer the place name of visits in the same time range. The calendar is never modified. The data is not sent to the developer or used for advertising. If the user separately enables an LLM for place-name inference, event titles for the same time range are included in the prompt sent to the destination the user selected."
+- `calendar.readonly`: "Only if the user enables calendar import in Settings, AREITU reads the titles and time ranges of the user's calendar events. They are used as hints to infer the place name of visits in the same time range. The calendar is never modified. The data is not sent to the developer or used for advertising. If the user separately enables an LLM for place-name inference, event titles and locations for the same time range, and place names from any Google Timeline file the user imported, are included in the prompt sent to the destination the user selected."
 
 ## Limited Use の声明
 
