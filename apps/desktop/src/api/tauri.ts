@@ -35,8 +35,9 @@ export async function saveSettings(settings: SaveSettingsInput): Promise<void> {
   return invoke<void>("save_settings", { settings });
 }
 
-export async function googleSignIn(): Promise<void> {
-  return invoke<void>("google_sign_in");
+/** `calendar` が true なら calendar.readonly スコープも要求する（画面上のチェックボックスの状態を渡す）。 */
+export async function googleSignIn(calendar: boolean): Promise<void> {
+  return invoke<void>("google_sign_in", { calendar });
 }
 
 export async function googleSignOut(): Promise<void> {

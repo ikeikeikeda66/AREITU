@@ -104,7 +104,7 @@ export function SettingsScreen({ onBack }: Props) {
     setGoogleBusy(true);
     setGoogleError(null);
     try {
-      await googleSignIn();
+      await googleSignIn(settings.calendarEnabled);
       setGoogleAccountStatus(await googleStatus());
     } catch (e) {
       setGoogleError(String(e));
@@ -322,9 +322,19 @@ export function SettingsScreen({ onBack }: Props) {
           Google カレンダーを自動で取り込む
         </label>
         {settings.calendarEnabled && googleAccountStatus === "signed_in" && (
-          <p className="text-sm text-slate-500">
-            設定を保存した後、初めて有効にした場合はカレンダーへのアクセス許可のため Google への再サインインが必要です。
-          </p>
+          <>
+            <p className="text-sm text-slate-500">
+              初めて有効にした場合は、カレンダーへのアクセスを Google で許可する必要があります。
+            </p>
+            <button
+              type="button"
+              onClick={handleGoogleSignIn}
+              disabled={googleBusy}
+              className="self-start rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+            >
+              カレンダーへのアクセスを許可
+            </button>
+          </>
         )}
       </section>
 

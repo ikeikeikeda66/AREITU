@@ -59,6 +59,18 @@ describe("OnboardingScreen", () => {
     await waitFor(() => expect(onFinish).toHaveBeenCalledTimes(1));
   });
 
+  it("sign-in passes the current calendar checkbox state, even when signing in before ticking it", async () => {
+    const signIn = vi.spyOn(tauriApi, "googleSignIn").mockResolvedValue(undefined);
+    render(<OnboardingScreen onFinish={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Google でサインイン" }));
+    await waitFor(() => expect(signIn).toHaveBeenLastCalledWith(false));
+
+    fireEvent.click(screen.getByLabelText("Google カレンダーを自動で取り込む"));
+    fireEvent.click(screen.getByRole("button", { name: "Google でサインイン" }));
+    await waitFor(() => expect(signIn).toHaveBeenLastCalledWith(true));
+  });
+
   it("cancelling the folder picker leaves the list unchanged", async () => {
     vi.mocked(dialog.open).mockResolvedValue(null);
     render(<OnboardingScreen onFinish={vi.fn()} />);

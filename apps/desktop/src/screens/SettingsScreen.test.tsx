@@ -38,6 +38,32 @@ describe("SettingsScreen — Google アカウント", () => {
     expect(await screen.findByText("未サインイン")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Google でサインイン" }));
     await waitFor(() => expect(signIn).toHaveBeenCalledTimes(1));
+    expect(signIn).toHaveBeenCalledWith(false);
+  });
+
+  it("signing in with the calendar box ticked (before saving) requests calendar access", async () => {
+    vi.spyOn(tauriApi, "getSettings").mockResolvedValue(baseSettings);
+    vi.spyOn(tauriApi, "googleStatus").mockResolvedValue("signed_out");
+    const signIn = vi.spyOn(tauriApi, "googleSignIn").mockResolvedValue(undefined);
+    render(<SettingsScreen onBack={vi.fn()} />);
+
+    await screen.findByText("未サインイン");
+    fireEvent.click(screen.getByLabelText("Google カレンダーを自動で取り込む"));
+    fireEvent.click(screen.getByRole("button", { name: "Google でサインイン" }));
+    await waitFor(() => expect(signIn).toHaveBeenCalledWith(true));
+  });
+
+  it("when signed in with the calendar box ticked, a grant button re-consents with calendar=true", async () => {
+    vi.spyOn(tauriApi, "getSettings").mockResolvedValue(baseSettings);
+    vi.spyOn(tauriApi, "googleStatus").mockResolvedValue("signed_in");
+    const signIn = vi.spyOn(tauriApi, "googleSignIn").mockResolvedValue(undefined);
+    render(<SettingsScreen onBack={vi.fn()} />);
+
+    await screen.findByText("サインイン済み");
+    expect(screen.queryByRole("button", { name: "カレンダーへのアクセスを許可" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Google カレンダーを自動で取り込む"));
+    fireEvent.click(screen.getByRole("button", { name: "カレンダーへのアクセスを許可" }));
+    await waitFor(() => expect(signIn).toHaveBeenCalledWith(true));
   });
 
   it("shows signed-in status with sign-out and drive-sync buttons", async () => {

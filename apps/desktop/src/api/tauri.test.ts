@@ -22,10 +22,16 @@ vi.mock("@tauri-apps/api/core", async () => {
 });
 
 describe("tauri api layer", () => {
-  it("googleSignIn invokes google_sign_in with no arguments", async () => {
+  it("googleSignIn invokes google_sign_in with the calendar flag (true)", async () => {
     const spy = vi.spyOn(core, "invoke").mockResolvedValue(undefined);
-    await googleSignIn();
-    expect(spy).toHaveBeenCalledWith("google_sign_in");
+    await googleSignIn(true);
+    expect(spy).toHaveBeenCalledWith("google_sign_in", { calendar: true });
+  });
+
+  it("googleSignIn invokes google_sign_in with the calendar flag (false)", async () => {
+    const spy = vi.spyOn(core, "invoke").mockResolvedValue(undefined);
+    await googleSignIn(false);
+    expect(spy).toHaveBeenCalledWith("google_sign_in", { calendar: false });
   });
 
   it("googleSignOut invokes google_sign_out with no arguments", async () => {

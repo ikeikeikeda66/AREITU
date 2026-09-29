@@ -6,7 +6,7 @@ use areitu_google::sync::{sync_now, DbSwapGuard, SyncContext, SyncOutcome};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager};
 
 use crate::config::AppConfig;
 
@@ -31,8 +31,10 @@ fn build_auth() -> Result<GoogleAuth<KeyringStore, SystemBrowser>, String> {
 
 const CALENDAR_ID: &str = "primary";
 
-pub fn calendar_scope_for(config: &AppConfig) -> String {
-    if config.calendar_enabled {
+/// サインイン時に要求するスコープ。画面上のチェックボックスの状態（`calendar`）で決める。
+/// 設定ファイルはまだ保存されていない場合があるため、ディスク上の config は見ない。
+pub fn sign_in_scope(calendar: bool) -> String {
+    if calendar {
         format!("{} {}", areitu_google::SCOPE_DRIVE_APPDATA, areitu_google::SCOPE_CALENDAR_READONLY)
     } else {
         areitu_google::SCOPE_DRIVE_APPDATA.to_owned()
@@ -88,10 +90,9 @@ pub fn ingest_calendar(conn: &Connection, config: &AppConfig, calendar_state_pat
 /// 非同期ランタイム上のワーカースレッドに逃がす。こうしないと呼び出し中
 /// フロントエンドの他の `invoke` 呼び出しがすべて詰まってしまう。
 #[tauri::command]
-pub async fn google_sign_in(state: State<'_, crate::AppState>) -> Result<(), String> {
-    let config = crate::config::load_config(&state.config_path);
+pub async fn google_sign_in(calendar: bool) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let scope = calendar_scope_for(&config);
+        let scope = sign_in_scope(calendar);
         build_auth()?.sign_in(&scope).map_err(|e| e.to_string())
     })
     .await
@@ -321,16 +322,14 @@ mod tests {
     }
 
     #[test]
-    fn calendar_scope_is_drive_only_when_calendar_import_is_disabled() {
-        let config = crate::config::AppConfig { calendar_enabled: false, ..crate::config::AppConfig::default() };
-        assert_eq!(calendar_scope_for(&config), areitu_google::SCOPE_DRIVE_APPDATA);
+    fn sign_in_scope_is_drive_only_when_calendar_is_not_requested() {
+        assert_eq!(sign_in_scope(false), areitu_google::SCOPE_DRIVE_APPDATA);
     }
 
     #[test]
-    fn calendar_scope_adds_calendar_readonly_when_enabled() {
-        let config = crate::config::AppConfig { calendar_enabled: true, ..crate::config::AppConfig::default() };
+    fn sign_in_scope_adds_calendar_readonly_when_requested() {
         assert_eq!(
-            calendar_scope_for(&config),
+            sign_in_scope(true),
             format!("{} {}", areitu_google::SCOPE_DRIVE_APPDATA, areitu_google::SCOPE_CALENDAR_READONLY)
         );
     }

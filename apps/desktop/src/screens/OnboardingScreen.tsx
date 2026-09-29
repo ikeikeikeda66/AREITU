@@ -34,7 +34,7 @@ export function OnboardingScreen({ onFinish }: Props) {
     setGoogleBusy(true);
     setGoogleError(null);
     try {
-      await googleSignIn();
+      await googleSignIn(calendarEnabled);
       setGoogleSignedIn(true);
     } catch (e) {
       setGoogleError(String(e));
