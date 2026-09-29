@@ -28,10 +28,10 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
-            args: --target universal-apple-darwin
+            args: --target universal-apple-darwin --config '{"bundle":{"createUpdaterArtifacts":true}}'
             rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
           - platform: windows-latest
-            args: ""
+            args: --config '{"bundle":{"createUpdaterArtifacts":true}}'
             rust-targets: ""
     runs-on: ${{ matrix.platform }}
     steps:
