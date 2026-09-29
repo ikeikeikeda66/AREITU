@@ -87,6 +87,26 @@ describe("SettingsScreen — Google アカウント", () => {
   });
 });
 
+describe("SettingsScreen — 読み込み失敗", () => {
+  it("shows the error and the sign-in button when the Google status call fails", async () => {
+    vi.spyOn(tauriApi, "getSettings").mockResolvedValue(baseSettings);
+    vi.spyOn(tauriApi, "googleStatus").mockRejectedValue("AREITU_GOOGLE_CLIENT_ID is not set at build time");
+    render(<SettingsScreen onBack={vi.fn()} />);
+
+    expect(await screen.findByText(/AREITU_GOOGLE_CLIENT_ID is not set/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Google でサインイン" })).toBeEnabled();
+    expect(screen.queryByText("状態を確認しています…")).not.toBeInTheDocument();
+  });
+
+  it("shows an error when loading the settings fails", async () => {
+    vi.spyOn(tauriApi, "getSettings").mockRejectedValue("settings unavailable");
+    vi.spyOn(tauriApi, "googleStatus").mockResolvedValue("signed_out");
+    render(<SettingsScreen onBack={vi.fn()} />);
+
+    expect(await screen.findByText(/settings unavailable/)).toBeInTheDocument();
+  });
+});
+
 describe("SettingsScreen — Google タイムライン取り込み", () => {
   const importButton = () => screen.findByRole("button", { name: "Google タイムラインを取り込む" });
 

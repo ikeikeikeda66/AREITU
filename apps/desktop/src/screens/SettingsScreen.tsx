@@ -50,6 +50,8 @@ export function SettingsScreen({ onBack }: Props) {
   const [placesKeyInput, setPlacesKeyInput] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [googleAccountStatus, setGoogleAccountStatus] = useState<GoogleStatus | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [googleStatusFailed, setGoogleStatusFailed] = useState(false);
   const [googleBusy, setGoogleBusy] = useState(false);
   const [googleError, setGoogleError] = useState<string | null>(null);
   const [driveSyncResult, setDriveSyncResult] = useState<string | null>(null);
@@ -58,8 +60,15 @@ export function SettingsScreen({ onBack }: Props) {
   const [timelineImportError, setTimelineImportError] = useState<string | null>(null);
 
   useEffect(() => {
-    getSettings().then(setSettings);
-    googleStatus().then(setGoogleAccountStatus);
+    getSettings()
+      .then(setSettings)
+      .catch((e: unknown) => setLoadError(`設定を読み込めませんでした: ${String(e)}`));
+    googleStatus()
+      .then(setGoogleAccountStatus)
+      .catch((e: unknown) => {
+        setGoogleStatusFailed(true);
+        setGoogleError(String(e));
+      });
   }, []);
 
   async function handleSave() {
@@ -83,7 +92,9 @@ export function SettingsScreen({ onBack }: Props) {
       setOpenaiKeyInput("");
       setGeminiKeyInput("");
       setPlacesKeyInput("");
-      getSettings().then(setSettings);
+      getSettings()
+        .then(setSettings)
+        .catch((e: unknown) => setLoadError(`設定を読み込めませんでした: ${String(e)}`));
     } catch (e) {
       setStatus(String(e));
     }
@@ -153,6 +164,8 @@ export function SettingsScreen({ onBack }: Props) {
       <button type="button" onClick={onBack} className="self-start text-sm text-slate-500 hover:text-slate-700">
         一覧に戻る
       </button>
+
+      {loadError !== null && <p className="text-sm text-red-600">{loadError}</p>}
 
       <section className="flex flex-col gap-2">
         <h2 className="text-lg font-semibold text-slate-900">監視フォルダ</h2>
@@ -322,7 +335,9 @@ export function SettingsScreen({ onBack }: Props) {
             ? "サインイン済み"
             : googleAccountStatus === "signed_out"
               ? "未サインイン"
-              : "状態を確認しています…"}
+              : googleStatusFailed
+                ? "状態を確認できません"
+                : "状態を確認しています…"}
         </p>
         <div className="flex items-center gap-3">
           {googleAccountStatus === "signed_in" ? (

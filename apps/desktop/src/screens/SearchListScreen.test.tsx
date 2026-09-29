@@ -12,6 +12,12 @@ describe("SearchListScreen", () => {
     expect(await screen.findByText("カフェ丸の内")).toBeInTheDocument();
   });
 
+  it("shows an error when loading places fails", async () => {
+    vi.spyOn(tauriApi, "listPlaces").mockRejectedValue("places unavailable");
+    render(<SearchListScreen onSelectPlace={vi.fn()} />);
+    expect(await screen.findByText(/places unavailable/)).toBeInTheDocument();
+  });
+
   it("keeps only the latest search result when requests resolve out of order", async () => {
     let resolveFirst: (places: Awaited<ReturnType<typeof tauriApi.listPlaces>>) => void = () => {};
     let resolveSecond: (places: Awaited<ReturnType<typeof tauriApi.listPlaces>>) => void = () => {};

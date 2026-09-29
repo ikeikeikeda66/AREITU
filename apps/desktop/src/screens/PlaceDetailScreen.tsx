@@ -13,12 +13,16 @@ export function PlaceDetailScreen({ place, onRenamed, onBack }: Props) {
   const [editing, setEditing] = useState(false);
   const [draftName, setDraftName] = useState(place.name);
   const [error, setError] = useState<string | null>(null);
+  const [visitsError, setVisitsError] = useState<string | null>(null);
 
   useEffect(() => {
     setDraftName(place.name);
     setEditing(false);
     setError(null);
-    visitsOf(place.id).then(setVisits);
+    setVisitsError(null);
+    visitsOf(place.id)
+      .then(setVisits)
+      .catch((e: unknown) => setVisitsError(`訪問履歴を読み込めませんでした: ${String(e)}`));
   }, [place.id, place.name]);
 
   async function handleSave() {
@@ -72,6 +76,8 @@ export function PlaceDetailScreen({ place, onRenamed, onBack }: Props) {
       )}
 
       {error !== null && <p className="text-sm text-red-600">{error}</p>}
+
+      {visitsError !== null && <p className="text-sm text-red-600">{visitsError}</p>}
 
       <p className="text-sm text-slate-600">{place.visitCount} 回</p>
 
