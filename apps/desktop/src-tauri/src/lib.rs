@@ -9,16 +9,11 @@ use std::sync::Mutex;
 
 use tauri::Manager;
 
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
-
 pub struct AppState {
     pub conn: Mutex<rusqlite::Connection>,
     pub config_path: std::path::PathBuf,
     pub db_path: std::path::PathBuf,
+    pub calendar_state_path: std::path::PathBuf,
     /// 写真/カレンダー同期（ポーリングスレッド・トレイの「今すぐ同期」・
     /// `sync_now` コマンド）と Drive 同期（`drive_sync_now` コマンド・
     /// ポーリングサイクル末尾の Drive 同期）を相互排除するためのロック。
@@ -36,6 +31,9 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let data_dir = app
                 .path()
@@ -51,11 +49,13 @@ pub fn run() {
                 .expect("failed to resolve app config dir");
             std::fs::create_dir_all(&config_dir).expect("failed to create app config dir");
             let config_path = config_dir.join("config.json");
+            let calendar_state_path = data_dir.join("google-calendar-state.json");
 
             app.manage(AppState {
                 conn: Mutex::new(conn),
                 config_path,
                 db_path,
+                calendar_state_path,
                 sync_lock: Mutex::new(()),
             });
 
@@ -64,13 +64,14 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            greet,
             commands::list_places,
             commands::visits_of,
             commands::rename_place,
             commands::sync_now,
             commands::get_settings,
             commands::save_settings,
+            commands::setup_completed,
+            commands::import_timeline_file,
             google::google_sign_in,
             google::google_sign_out,
             google::google_status,

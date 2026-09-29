@@ -31,6 +31,14 @@ pub enum AuthStatus {
     SignedIn,
 }
 
+/// Reads the sign-in state from the token store alone; no client credentials are needed.
+pub fn auth_status(store: &impl crate::keychain::TokenStore) -> crate::Result<AuthStatus> {
+    Ok(match store.load_refresh_token()? {
+        Some(_) => AuthStatus::SignedIn,
+        None => AuthStatus::SignedOut,
+    })
+}
+
 pub struct GoogleAuth<S: crate::keychain::TokenStore, B: BrowserOpener> {
     store: S,
     browser: B,
@@ -50,17 +58,14 @@ impl<S: crate::keychain::TokenStore, B: BrowserOpener> GoogleAuth<S, B> {
     }
 
     pub fn status(&self) -> crate::Result<AuthStatus> {
-        Ok(match self.store.load_refresh_token()? {
-            Some(_) => AuthStatus::SignedIn,
-            None => AuthStatus::SignedOut,
-        })
+        auth_status(&self.store)
     }
 
     pub fn sign_out(&self) -> crate::Result<()> {
         self.store.clear_refresh_token()
     }
 
-    pub fn sign_in(&self) -> crate::Result<()> {
+    pub fn sign_in(&self, scope: &str) -> crate::Result<()> {
         let (listener, port) = crate::loopback::bind_loopback()?;
         let redirect_uri = format!("http://127.0.0.1:{port}/callback");
         let pkce = crate::oauth::generate_pkce();
@@ -70,7 +75,7 @@ impl<S: crate::keychain::TokenStore, B: BrowserOpener> GoogleAuth<S, B> {
             &crate::oauth::AuthorizeUrlParams {
                 client_id: &self.creds.client_id,
                 redirect_uri: &redirect_uri,
-                scope: crate::SCOPE_DRIVE_APPDATA,
+                scope,
                 state: &state,
                 code_challenge: &pkce.challenge,
             },
@@ -136,6 +141,14 @@ mod tests {
     }
 
     #[test]
+    fn auth_status_needs_only_the_token_store() {
+        let store = InMemoryStore::new();
+        assert_eq!(auth_status(&store).unwrap(), AuthStatus::SignedOut);
+        store.save_refresh_token("r").unwrap();
+        assert_eq!(auth_status(&store).unwrap(), AuthStatus::SignedIn);
+    }
+
+    #[test]
     fn access_token_without_sign_in_is_an_error() {
         let auth = GoogleAuth::new(InMemoryStore::new(), RecordingBrowser(Arc::new(Mutex::new(None))), crate::oauth::TokenClient::new().unwrap(), test_creds());
         let err = auth.access_token().unwrap_err();
@@ -166,7 +179,7 @@ mod tests {
 
         // sign_in はブラウザ起動後にループバックの応答を待ち続けるので、
         // 別スレッドでテストが「ユーザーの認可完了」を模したリダイレクトを送る。
-        let handle = std::thread::spawn(move || auth.sign_in().map(|()| auth));
+        let handle = std::thread::spawn(move || auth.sign_in(crate::SCOPE_DRIVE_APPDATA).map(|()| auth));
         let mut fired = false;
         for _ in 0..100 {
             std::thread::sleep(Duration::from_millis(20));
@@ -212,7 +225,7 @@ mod tests {
             crate::oauth::TokenClient::new().unwrap().with_base_url(&token_server.base_url()),
             test_creds(),
         );
-        let handle = std::thread::spawn(move || auth.sign_in());
+        let handle = std::thread::spawn(move || auth.sign_in(crate::SCOPE_DRIVE_APPDATA));
         for _ in 0..100 {
             std::thread::sleep(Duration::from_millis(20));
             if let Some(url) = browser_url.lock().unwrap().clone() {
@@ -230,5 +243,46 @@ mod tests {
         }
         let err = handle.join().unwrap().unwrap_err();
         assert!(matches!(err, crate::Error::OAuth(_)));
+    }
+
+    #[test]
+    fn sign_in_requests_the_scope_it_is_given() {
+        let token_server = MockServer::start();
+        token_server.mock(|when, then| {
+            when.method(httpmock::Method::POST).path("/token");
+            then.status(200).json_body(serde_json::json!({
+                "access_token": "access-1",
+                "expires_in": 3600,
+                "refresh_token": "refresh-1",
+                "scope": format!("{} {}", crate::SCOPE_DRIVE_APPDATA, crate::SCOPE_CALENDAR_READONLY),
+                "token_type": "Bearer"
+            }));
+        });
+        let browser_url = Arc::new(Mutex::new(None));
+        let auth = GoogleAuth::new(
+            InMemoryStore::new(),
+            RecordingBrowser(browser_url.clone()),
+            crate::oauth::TokenClient::new().unwrap().with_base_url(&token_server.base_url()),
+            test_creds(),
+        );
+        let combined_scope = format!("{} {}", crate::SCOPE_DRIVE_APPDATA, crate::SCOPE_CALENDAR_READONLY);
+        let handle = std::thread::spawn(move || auth.sign_in(&combined_scope));
+        for _ in 0..100 {
+            std::thread::sleep(Duration::from_millis(20));
+            if let Some(url) = browser_url.lock().unwrap().clone() {
+                let parsed = url::Url::parse(&url).unwrap();
+                let pairs: std::collections::HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+                assert_eq!(pairs.get("scope").unwrap(), &format!("{} {}", crate::SCOPE_DRIVE_APPDATA, crate::SCOPE_CALENDAR_READONLY));
+                let port: u16 = url::Url::parse(pairs.get("redirect_uri").unwrap()).unwrap().port().unwrap();
+                let state = pairs.get("state").unwrap().clone();
+                let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+                let req = format!("GET /callback?code=auth-code-1&state={state} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+                stream.write_all(req.as_bytes()).unwrap();
+                let mut discard = [0u8; 512];
+                let _ = stream.read(&mut discard);
+                break;
+            }
+        }
+        handle.join().unwrap().unwrap();
     }
 }

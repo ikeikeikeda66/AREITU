@@ -4,6 +4,7 @@ use chrono::NaiveDateTime;
 pub enum Source {
     Photo,
     Calendar,
+    Timeline,
 }
 
 impl Source {
@@ -11,6 +12,7 @@ impl Source {
         match self {
             Source::Photo => "photo",
             Source::Calendar => "calendar",
+            Source::Timeline => "timeline",
         }
     }
 
@@ -18,6 +20,7 @@ impl Source {
         match s {
             "photo" => Some(Source::Photo),
             "calendar" => Some(Source::Calendar),
+            "timeline" => Some(Source::Timeline),
             _ => None,
         }
     }
@@ -32,4 +35,20 @@ pub struct RawLog {
     pub lat: Option<f64>,
     pub lon: Option<f64>,
     pub text: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timeline_source_round_trips_through_as_str_and_parse() {
+        assert_eq!(Source::Timeline.as_str(), "timeline");
+        assert_eq!(Source::parse("timeline"), Some(Source::Timeline));
+    }
+
+    #[test]
+    fn unknown_source_string_is_none() {
+        assert_eq!(Source::parse("bogus"), None);
+    }
 }

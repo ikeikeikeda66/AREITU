@@ -51,6 +51,8 @@ jobs:
       - working-directory: apps/desktop
         run: npm ci
       - working-directory: apps/desktop
+        run: npm run check:versions
+      - working-directory: apps/desktop
         run: npm run test
       - working-directory: apps/desktop
         run: npm run build

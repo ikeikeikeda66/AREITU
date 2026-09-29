@@ -36,4 +36,10 @@ describe("PlaceDetailScreen", () => {
     expect(await screen.findByText("place name must not be empty")).toBeInTheDocument();
     expect(screen.getByLabelText("新しい名前")).toHaveValue("   ");
   });
+
+  it("shows an error when loading the visits fails", async () => {
+    vi.spyOn(tauriApi, "visitsOf").mockRejectedValue("visits unavailable");
+    render(<PlaceDetailScreen place={place} onRenamed={vi.fn()} onBack={vi.fn()} />);
+    expect(await screen.findByText(/visits unavailable/)).toBeInTheDocument();
+  });
 });

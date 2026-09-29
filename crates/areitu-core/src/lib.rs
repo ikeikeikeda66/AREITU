@@ -9,6 +9,7 @@ pub mod query;
 pub mod resolve;
 pub mod scan;
 pub mod store;
+pub mod timeline;
 
 /// 外部クレート（Tauri バックエンドなど）のテストから `VisitCandidate` を組み立てるための
 /// 最小限の公開ヘルパー。本体ロジックは含まない。

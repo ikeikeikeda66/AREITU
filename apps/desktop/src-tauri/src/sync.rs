@@ -25,6 +25,9 @@ pub struct SyncSummary {
     pub scan_errors: Vec<String>,
     pub visits_created: usize,
     pub resolve_failed: usize,
+    pub calendar_synced: usize,
+    pub calendar_removed: usize,
+    pub calendar_errors: Vec<String>,
 }
 
 pub fn run_sync(
@@ -49,12 +52,11 @@ pub fn run_sync(
 }
 
 pub fn build_geocoder(config: &AppConfig, secrets: &dyn SecretStore) -> Box<dyn ReverseGeocoder> {
-    if config.google_places_enabled {
-        if let Some(key) = secrets.get(GOOGLE_PLACES_KEY) {
-            if let Ok(g) = GooglePlaces::new(&key) {
-                return Box::new(g);
-            }
-        }
+    if config.google_places_enabled
+        && let Ok(Some(key)) = secrets.get(GOOGLE_PLACES_KEY)
+        && let Ok(g) = GooglePlaces::new(&key)
+    {
+        return Box::new(g);
     }
     Box::new(Nominatim::new(USER_AGENT).expect("building a Nominatim client never fails"))
 }
@@ -72,10 +74,14 @@ pub fn build_llm(config: &AppConfig, secrets: &dyn SecretStore) -> Option<Box<dy
         }
         LlmProvider::OpenAi => secrets
             .get(OPENAI_KEY)
+            .ok()
+            .flatten()
             .and_then(|key| OpenAi::new(&key, &config.openai_model).ok())
             .map(|c| Box::new(c) as Box<dyn LlmClient>),
         LlmProvider::Gemini => secrets
             .get(GEMINI_KEY)
+            .ok()
+            .flatten()
             .and_then(|key| Gemini::new(&key, &config.gemini_model).ok())
             .map(|c| Box::new(c) as Box<dyn LlmClient>),
     }
@@ -83,12 +89,18 @@ pub fn build_llm(config: &AppConfig, secrets: &dyn SecretStore) -> Option<Box<dy
 
 pub fn run_sync_with_config(
     conn: &mut Connection,
+    calendar_state_path: &Path,
     config: &AppConfig,
     secrets: &dyn SecretStore,
 ) -> Result<SyncSummary, String> {
+    let calendar_summary = crate::google::ingest_calendar(conn, config, calendar_state_path);
     let geocoder = build_geocoder(config, secrets);
     let llm = build_llm(config, secrets);
-    run_sync(conn, &config.watched_dirs, geocoder.as_ref(), llm.as_deref(), config.min_confidence)
+    let mut summary = run_sync(conn, &config.watched_dirs, geocoder.as_ref(), llm.as_deref(), config.min_confidence)?;
+    summary.calendar_synced = calendar_summary.events_synced;
+    summary.calendar_removed = calendar_summary.events_removed;
+    summary.calendar_errors = calendar_summary.errors;
+    Ok(summary)
 }
 
 /// バックグラウンド同期（ポーリングスレッド・トレイの「今すぐ同期」・sync_now コマンド）は
@@ -99,11 +111,12 @@ pub fn run_sync_with_config(
 /// 同じ DB ファイルへの別接続とは待ち合わせで解決する。
 pub fn sync_on_own_connection(
     db_path: &Path,
+    calendar_state_path: &Path,
     config: &AppConfig,
     secrets: &dyn SecretStore,
 ) -> Result<SyncSummary, String> {
     let mut conn = areitu_core::db::open(db_path).map_err(|e| e.to_string())?;
-    run_sync_with_config(&mut conn, config, secrets)
+    run_sync_with_config(&mut conn, calendar_state_path, config, secrets)
 }
 
 /// `sync_on_own_connection` を `AppState.sync_lock` の下で実行する。写真/カレンダー
@@ -113,11 +126,12 @@ pub fn sync_on_own_connection(
 pub fn sync_on_own_connection_locked(
     sync_lock: &Mutex<()>,
     db_path: &Path,
+    calendar_state_path: &Path,
     config: &AppConfig,
     secrets: &dyn SecretStore,
 ) -> Result<SyncSummary, String> {
     let _guard = sync_lock.lock().map_err(|e| e.to_string())?;
-    sync_on_own_connection(db_path, config, secrets)
+    sync_on_own_connection(db_path, calendar_state_path, config, secrets)
 }
 
 use std::time::Duration;
@@ -143,16 +157,22 @@ pub fn spawn_poll_thread(app: AppHandle) {
             let _ = sync_on_own_connection_locked(
                 &state.sync_lock,
                 &state.db_path,
+                &state.calendar_state_path,
                 &config,
                 &crate::config::KeyringSecretStore,
             );
 
-            if let Ok((db_path, state_path)) = crate::google::sync_paths(&app) {
-                if let Err(e) =
-                    crate::google::drive_sync_locked(&state.sync_lock, &state.conn, &db_path, &state_path)
-                {
-                    eprintln!("drive sync skipped this cycle: {e}");
-                }
+            if let Ok((db_path, state_path)) = crate::google::sync_paths(&app)
+                && let Err(e) =
+                    crate::google::drive_sync_locked(
+                        &state.sync_lock,
+                        &state.conn,
+                        &db_path,
+                        &state_path,
+                        &state.calendar_state_path,
+                    )
+            {
+                eprintln!("drive sync skipped this cycle: {e}");
             }
         }
     });
@@ -230,7 +250,8 @@ mod tests {
         let secrets = FakeSecretStore::new();
         // ネットワークに出る前提のテストは避け、build_llm が None を返すことだけを確認する
         assert!(build_llm(&config, &secrets).is_none());
-        let summary = run_sync_with_config(&mut c, &config, &secrets);
+        let dir = tempfile::tempdir().unwrap();
+        let summary = run_sync_with_config(&mut c, &dir.path().join("google-calendar-state.json"), &config, &secrets);
         assert!(summary.is_ok());
     }
 
@@ -270,7 +291,7 @@ mod tests {
 
         let config = AppConfig::default(); // watched_dirs は空
         let secrets = crate::config::FakeSecretStore::new();
-        let summary = sync_on_own_connection(&db_path, &config, &secrets);
+        let summary = sync_on_own_connection(&db_path, &dir.path().join("google-calendar-state.json"), &config, &secrets);
 
         assert!(summary.is_ok());
     }
@@ -304,14 +325,17 @@ mod tests {
             scan_errors: vec!["boom".to_string()],
             visits_created: 2,
             resolve_failed: 3,
+            calendar_synced: 4,
+            calendar_removed: 5,
+            calendar_errors: vec!["cal-boom".to_string()],
         };
         let json = serde_json::to_value(&summary).unwrap();
         let obj = json.as_object().unwrap();
-        assert!(obj.contains_key("scanErrors"), "missing scanErrors: {json}");
-        assert!(obj.contains_key("visitsCreated"), "missing visitsCreated: {json}");
-        assert!(obj.contains_key("resolveFailed"), "missing resolveFailed: {json}");
-        assert!(!obj.contains_key("scan_errors"), "snake_case leaked: {json}");
-        assert!(!obj.contains_key("visits_created"), "snake_case leaked: {json}");
-        assert!(!obj.contains_key("resolve_failed"), "snake_case leaked: {json}");
+        for key in ["scanErrors", "visitsCreated", "resolveFailed", "calendarSynced", "calendarRemoved", "calendarErrors"] {
+            assert!(obj.contains_key(key), "missing {key}: {json}");
+        }
+        for key in ["scan_errors", "visits_created", "resolve_failed", "calendar_synced", "calendar_removed", "calendar_errors"] {
+            assert!(!obj.contains_key(key), "snake_case leaked: {json}");
+        }
     }
 }

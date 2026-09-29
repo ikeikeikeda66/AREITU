@@ -45,6 +45,7 @@ pub fn build_authorize_url(base_url: &str, p: &AuthorizeUrlParams) -> crate::Res
         .append_pair("code_challenge_method", "S256")
         .append_pair("state", p.state)
         .append_pair("access_type", "offline")
+        .append_pair("include_granted_scopes", "true")
         .append_pair("prompt", "consent");
     Ok(url.to_string())
 }
@@ -72,6 +73,21 @@ mod authorize_url_tests {
         assert_eq!(pairs.get("scope").unwrap(), crate::SCOPE_DRIVE_APPDATA);
         assert_eq!(pairs.get("state").unwrap(), "state-abc");
         assert_eq!(parsed.path(), "/o/oauth2/v2/auth");
+    }
+
+    #[test]
+    fn includes_granted_scopes_is_always_true() {
+        let params = AuthorizeUrlParams {
+            client_id: "client-123",
+            redirect_uri: "http://127.0.0.1:54321/callback",
+            scope: crate::SCOPE_DRIVE_APPDATA,
+            state: "state-abc",
+            code_challenge: "challenge-xyz",
+        };
+        let url = build_authorize_url("https://accounts.google.com", &params).unwrap();
+        let parsed = url::Url::parse(&url).unwrap();
+        let pairs: std::collections::HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+        assert_eq!(pairs.get("include_granted_scopes").unwrap(), "true");
     }
 
     #[test]

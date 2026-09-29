@@ -1,13 +1,68 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { SearchListScreen } from "./screens/SearchListScreen";
 import { PlaceDetailScreen } from "./screens/PlaceDetailScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
+import { OnboardingScreen } from "./screens/OnboardingScreen";
+import { setupCompleted } from "./api/tauri";
+import { checkForUpdate, installUpdateAndRestart, type UpdateCheckResult } from "./api/updater";
 import type { Place } from "./api/types";
 
 type View = { kind: "list" } | { kind: "detail"; place: Place } | { kind: "settings" };
 
 export default function App() {
+  const [needsOnboarding, setNeedsOnboarding] = useState<boolean | null>(null);
   const [view, setView] = useState<View>({ kind: "list" });
+  const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult>({ available: false });
+  const [installing, setInstalling] = useState(false);
+  const [installError, setInstallError] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    checkForUpdate().then((result) => {
+      if (!cancelled) setUpdateInfo(result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function handleInstallUpdate() {
+    if (!updateInfo.available) return;
+    setInstalling(true);
+    setInstallError(false);
+    try {
+      await installUpdateAndRestart(updateInfo.update);
+    } catch {
+      setInstalling(false);
+      setInstallError(true);
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    setupCompleted()
+      .then((completed) => {
+        if (!cancelled) setNeedsOnboarding(!completed);
+      })
+      .catch(() => {
+        if (!cancelled) setNeedsOnboarding(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (needsOnboarding === null) {
+    return (
+      <div role="status" className="flex min-h-screen items-center justify-center bg-slate-100 text-sm text-slate-500">
+        読み込み中…
+      </div>
+    );
+  }
+
+  if (needsOnboarding) {
+    return <OnboardingScreen onFinish={() => setNeedsOnboarding(false)} />;
+  }
 
   if (view.kind === "settings") {
     return <SettingsScreen onBack={() => setView({ kind: "list" })} />;
@@ -27,6 +82,23 @@ export default function App() {
 
   return (
     <div className="flex flex-col">
+      {updateInfo.available && (
+        <div className="flex items-center justify-between bg-amber-100 p-2 text-sm text-amber-900">
+          <span>
+            {installError
+              ? "更新に失敗しました。後でもう一度お試しください"
+              : `新しいバージョン ${updateInfo.version} が利用可能です`}
+          </span>
+          <button
+            type="button"
+            onClick={handleInstallUpdate}
+            disabled={installing}
+            className="rounded-md border border-amber-400 px-3 py-1 hover:bg-amber-200 disabled:opacity-50"
+          >
+            {installing ? "更新中..." : "更新して再起動"}
+          </button>
+        </div>
+      )}
       <div className="flex justify-end p-2">
         <button
           type="button"

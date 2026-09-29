@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod calendar;
 pub mod decision;
 pub mod drive;
 pub mod keychain;
@@ -23,6 +24,11 @@ pub enum Error {
     OAuth(String),
     #[error("keychain: {0}")]
     Keychain(String),
+    #[error("calendar sync token expired (HTTP 410)")]
+    SyncTokenExpired,
+    /// UI はこのメッセージの先頭 "calendar not authorized" で再同意のヒントを出し分ける。
+    #[error("calendar not authorized (HTTP 401/403): calendar.readonly scope is missing or the token was rejected")]
+    CalendarNotAuthorized,
     #[error("{0}")]
     Invalid(String),
 }
@@ -32,6 +38,10 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// このフェーズでリクエストするスコープは appDataFolder のみ。
 /// カレンダーへの incremental auth は Phase 3 で別スコープを追加する。
 pub const SCOPE_DRIVE_APPDATA: &str = "https://www.googleapis.com/auth/drive.appdata";
+
+/// Phase 3 で追加するスコープ。ユーザーが設定でカレンダー連携を有効にしたときだけ、
+/// `SCOPE_DRIVE_APPDATA` と合わせて incremental authorization でリクエストする。
+pub const SCOPE_CALENDAR_READONLY: &str = "https://www.googleapis.com/auth/calendar.readonly";
 
 #[cfg(test)]
 mod tests {
@@ -47,5 +57,10 @@ mod tests {
     #[test]
     fn scope_is_drive_appdata_only() {
         assert_eq!(SCOPE_DRIVE_APPDATA, "https://www.googleapis.com/auth/drive.appdata");
+    }
+
+    #[test]
+    fn calendar_readonly_scope_constant_is_correct() {
+        assert_eq!(SCOPE_CALENDAR_READONLY, "https://www.googleapis.com/auth/calendar.readonly");
     }
 }

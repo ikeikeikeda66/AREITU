@@ -18,7 +18,8 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; connect-src 'self' ipc: http://ipc.localhost; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'",
+      "devCsp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; connect-src 'self' ipc: http://ipc.localhost ws://localhost:1420 http://localhost:1420; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
     },
     "trayIcon": {
       "iconPath": "icons/icon.png"
@@ -34,5 +35,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "REPLACE_WITH_OWNER_GENERATED_MINISIGN_PUBLIC_KEY_FROM_STEP_1",
+      "endpoints": [
+        "https://github.com/ikeikeikeda66/AREITU/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

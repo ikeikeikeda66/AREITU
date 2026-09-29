@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Privacy Policy - AREITU</title>
+  <style>body{font-family:system-ui,sans-serif;max-width:46rem;margin:2rem auto;padding:0 1rem;line-height:1.7;color:#1a1a1a}code{background:#eee;padding:0 .25em}@media(prefers-color-scheme:dark){body{background:#161616;color:#e6e6e6}code{background:#333}a{color:#8ab4f8}}</style>
+</head>
+<body>
+  <h1>Privacy Policy</h1>
+  <p>Last updated: September 29, 2026</p>
+
+  <h2>Overview</h2>
+  <p>
+    AREITU does not run its own server. Your data is never sent to a server operated by the developer, and the
+    developer has no access to it. Your visit-log data (<code>areitu.db</code>, a SQLite file) is stored on your
+    device's local disk. If you sign in with your Google account, this file is also stored in and synced with the
+    "appDataFolder" of your own Google Drive. This folder is not shown in the normal Google Drive UI and is not
+    accessible to anything other than AREITU's OAuth client.
+  </p>
+  <p>
+    AREITU does not encrypt the database itself. Neither the local <code>areitu.db</code> nor the copy on Drive is
+    encrypted by AREITU (Google's own encryption at rest applies to the copy on Drive).
+  </p>
+
+  <h2>Data handled</h2>
+  <ul>
+    <li>Capture time and location (latitude/longitude) read from photos in the folders you specify. The photo files themselves are not sent anywhere.</li>
+    <li>Times, coordinates and place names read from a Google Timeline (Takeout) file that you choose to import in the app. The file itself is only read on your device and is not sent anywhere.</li>
+    <li>Visits derived from them (times, coordinates, inferred place names).</li>
+    <li>Only if you enable calendar import: your Google Calendar events (title and time range).</li>
+  </ul>
+
+  <h2>Google OAuth scopes requested</h2>
+  <ul>
+    <li>
+      <code>https://www.googleapis.com/auth/drive.appdata</code>: always requested at sign-in. Used only to upload and
+      download <code>areitu.db</code> to and from the appDataFolder of your own Google Drive. When a sync conflict
+      occurs, a backup copy (<code>areitu-conflict-&lt;timestamp&gt;.db</code>) is also created in the same folder.
+    </li>
+    <li>
+      <code>https://www.googleapis.com/auth/calendar.readonly</code>: requested only if you enable calendar import in
+      Settings. Used to read events as hints for inferring the place name of visits in the same time range. AREITU
+      never modifies your calendar.
+    </li>
+  </ul>
+
+  <h2>When data leaves your device</h2>
+  <p>
+    The following is everything AREITU sends over the network. Each destination also receives your IP address as
+    part of the connection.
+  </p>
+  <ul>
+    <li>
+      <strong>Reverse geocoding (enabled by default)</strong>: to infer a place name, the latitude/longitude of a
+      visit is sent to OpenStreetMap's Nominatim (<code>nominatim.openstreetmap.org</code>). If you enable Google
+      Places in Settings and enter an API key, the coordinates are sent to the Google Places API
+      (<code>places.googleapis.com</code>). Nothing is sent for coordinates already registered in the app's local
+      dictionary.
+    </li>
+    <li>
+      <strong>LLM place-name inference (disabled by default)</strong>: runs only if you select an LLM in Settings.
+      When reverse geocoding yields no facility name, or the name disagrees with a calendar event, the following is
+      sent as a prompt: the visit's start and end times, latitude/longitude, the reverse-geocoding address and
+      facility name, the titles and locations of calendar events in the same time range, and the
+      place names from imported Timeline entries that belong to the same visit. Timeline place names are sent whenever a
+      Timeline file has been imported, whether or not calendar import is enabled. The destination depends on your
+      choice:
+      <ul>
+        <li>Ollama: the URL you configure (default is the same machine, <code>http://localhost:11434</code>). If you point it at another host, the prompt goes to that host.</li>
+        <li>OpenAI: <code>api.openai.com</code> (using your API key)</li>
+        <li>Gemini: <code>generativelanguage.googleapis.com</code> (using your API key)</li>
+      </ul>
+    </li>
+    <li>
+      <strong>Google sign-in and sync</strong>: if you sign in, AREITU communicates with
+      <code>accounts.google.com</code>, <code>oauth2.googleapis.com</code> and <code>www.googleapis.com</code> (Drive,
+      and Calendar if calendar import is enabled). While signed in, <code>areitu.db</code> is synced automatically at
+      the polling interval you set.
+    </li>
+    <li>
+      <strong>Update check</strong>: the app fetches update information from GitHub
+      (<code>github.com/ikeikeikeda66/AREITU/releases</code>).
+    </li>
+  </ul>
+  <p>AREITU sends nothing else. It sends no data for advertising or analytics.</p>
+
+  <h2>Google user data (Limited Use)</h2>
+  <p>
+    AREITU's use and transfer to any other app of information received from Google APIs adheres to the
+    <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data
+    Policy</a>, including the Limited Use requirements.
+  </p>
+  <ul>
+    <li>Drive data is used only to sync your own database. Calendar data is used only to infer place names for visits.</li>
+    <li>Google user data is not transferred to the developer or to third parties. The one exception is that, if you enable an LLM as described above, calendar event titles and locations, and place names from imported Timeline entries, are sent to the LLM destination you chose.</li>
+    <li>Google user data is not used for advertising.</li>
+    <li>The developer does not read Google user data (the developer has no access to it).</li>
+  </ul>
+
+  <h2>Where data is stored</h2>
+  <ul>
+    <li>Visit database: <code>areitu.db</code> in the OS application-data directory (identifier <code>com.areitu.desktop</code>)</li>
+    <li>Sync state: files such as <code>google-calendar-state.json</code> in the same directory</li>
+    <li>Settings: <code>config.json</code> in the OS application-config directory (contains no API keys)</li>
+    <li>OpenAI / Gemini / Google Places API keys and the Google refresh token: only in the OS keychain (keyring)</li>
+    <li>Copy made by Drive sync: the appDataFolder of your own Google account</li>
+  </ul>
+
+  <h2>How to delete your data</h2>
+  <ol>
+    <li>Signing out in AREITU's Settings deletes the Google refresh token stored in your device's keychain. It does not revoke access on Google's side or delete data on Drive.</li>
+    <li>
+      Removing AREITU's access on your
+      <a href="https://myaccount.google.com/permissions">Google Account third-party access page</a> stops AREITU from
+      accessing your Google data from then on.
+    </li>
+    <li>
+      To delete the copy on Drive, open Google Drive, go to Settings, then Manage apps, select AREITU and choose
+      "Delete hidden app data" (if AREITU is no longer listed, do this before removing access above).
+    </li>
+    <li>
+      To delete data on your device, uninstall AREITU and delete the <code>com.areitu.desktop</code> folders under
+      the OS application-data and config directories (<code>areitu.db</code>, <code>config.json</code> and related
+      files). Remove stored API keys with your OS keychain tool.
+    </li>
+  </ol>
+
+  <h2>Contact</h2>
+  <p>
+    For questions about this Privacy Policy, please use the
+    <a href="https://github.com/ikeikeikeda66/AREITU/issues">Issues page of the GitHub repository</a>.
+  </p>
+</body>
+</html>

@@ -100,6 +100,17 @@ pub fn upsert_raw_log(conn: &Connection, log: &RawLog) -> Result<()> {
     Ok(())
 }
 
+/// 対象の raw_log がまだ visit に割り当てられていない場合だけ削除する。
+/// 既に visit に組み込まれている raw_log は、後からカレンダー側でキャンセルされても
+/// 過去に確定した訪問履歴を壊さないよう、削除しない。
+pub fn delete_unassigned_raw_log(conn: &Connection, source: Source, source_id: &str) -> Result<bool> {
+    let changed = conn.execute(
+        "DELETE FROM raw_logs WHERE source = ?1 AND source_id = ?2 AND visit_id IS NULL",
+        params![source.as_str(), source_id],
+    )?;
+    Ok(changed > 0)
+}
+
 pub fn unassigned_raw_logs(conn: &Connection) -> Result<Vec<(i64, RawLog)>> {
     let mut stmt = conn.prepare(
         "SELECT id, source, source_id, occurred_at, ended_at, lat, lon, text
@@ -185,5 +196,42 @@ mod tests {
             .map(|(_, l)| l.source_id)
             .collect();
         assert_eq!(ids, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn deletes_an_unassigned_raw_log() {
+        let c = open_in_memory().unwrap();
+        upsert_raw_log(&c, &event("e1", "2026-09-01 12:00", "ランチ")).unwrap();
+        let deleted = delete_unassigned_raw_log(&c, Source::Calendar, "e1").unwrap();
+        assert!(deleted);
+        assert!(unassigned_raw_logs(&c).unwrap().is_empty());
+    }
+
+    #[test]
+    fn leaves_an_already_assigned_raw_log_untouched() {
+        let c = open_in_memory().unwrap();
+        upsert_raw_log(&c, &event("e1", "2026-09-01 12:00", "ランチ")).unwrap();
+        let log_id = unassigned_raw_logs(&c).unwrap()[0].0;
+        let place_id = find_or_create_place(&c, "カフェ丸の内", 35.0, 139.0).unwrap();
+        c.execute(
+            "INSERT INTO visits (place_id, started_at, ended_at, method) VALUES (?1, '2026-09-01 12:00', '2026-09-01 12:30', 'nominatim')",
+            params![place_id],
+        )
+        .unwrap();
+        let visit_id: i64 = c
+            .query_row("SELECT id FROM visits WHERE place_id = ?1", params![place_id], |r| r.get(0))
+            .unwrap();
+        c.execute("UPDATE raw_logs SET visit_id = ?1 WHERE id = ?2", params![visit_id, log_id]).unwrap();
+
+        let deleted = delete_unassigned_raw_log(&c, Source::Calendar, "e1").unwrap();
+        assert!(!deleted, "an already-assigned raw log must not be deleted");
+        let count: i64 = c.query_row("SELECT COUNT(*) FROM raw_logs", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn deleting_a_nonexistent_raw_log_is_not_an_error() {
+        let c = open_in_memory().unwrap();
+        assert!(!delete_unassigned_raw_log(&c, Source::Calendar, "missing").unwrap());
     }
 }
