@@ -20,6 +20,9 @@ jobs:
         run: npm ci
       - working-directory: apps/desktop
         run: npm run check:versions
+      - name: Refuse to release with the placeholder updater key
+        working-directory: apps/desktop
+        run: node scripts/check-updater-pubkey.mjs
 
   release:
     needs: check-versions
