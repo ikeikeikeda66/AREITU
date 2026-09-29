@@ -55,6 +55,8 @@ export function SettingsScreen({ onBack }: Props) {
   const [status, setStatus] = useState<string | null>(null);
   const [googleAccountStatus, setGoogleAccountStatus] = useState<GoogleStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // getSettings が成功するまで保存させない（既定値で実際の config.json を上書きしないため）。
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [googleStatusFailed, setGoogleStatusFailed] = useState(false);
   const [googleBusy, setGoogleBusy] = useState(false);
   const [googleError, setGoogleError] = useState<string | null>(null);
@@ -65,7 +67,10 @@ export function SettingsScreen({ onBack }: Props) {
 
   useEffect(() => {
     getSettings()
-      .then(setSettings)
+      .then((loaded) => {
+        setSettings(loaded);
+        setSettingsLoaded(true);
+      })
       .catch((e: unknown) => setLoadError(`設定を読み込めませんでした: ${String(e)}`));
     googleStatus()
       .then(setGoogleAccountStatus)
@@ -421,10 +426,14 @@ export function SettingsScreen({ onBack }: Props) {
         <button
           type="button"
           onClick={handleSave}
-          className="rounded-md bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+          disabled={!settingsLoaded}
+          className="rounded-md bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
         >
           保存
         </button>
+        {!settingsLoaded && loadError !== null && (
+          <span className="text-sm text-red-600">設定を読み込めていないため保存できません</span>
+        )}
         {status !== null && <span className="text-sm text-slate-600">{status}</span>}
       </div>
     </div>

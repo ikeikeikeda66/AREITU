@@ -169,6 +169,29 @@ describe("SettingsScreen — 読み込み失敗", () => {
 
     expect(await screen.findByText(/settings unavailable/)).toBeInTheDocument();
   });
+
+  it("disables Save and explains why when loading the settings fails, so defaults cannot overwrite the real config", async () => {
+    vi.spyOn(tauriApi, "getSettings").mockRejectedValue("settings unavailable");
+    vi.spyOn(tauriApi, "googleStatus").mockResolvedValue("signed_out");
+    const save = vi.spyOn(tauriApi, "saveSettings").mockResolvedValue(undefined);
+    render(<SettingsScreen onBack={vi.fn()} />);
+
+    await screen.findByText(/settings unavailable/);
+    const button = screen.getByRole("button", { name: "保存" });
+    expect(button).toBeDisabled();
+    expect(screen.getByText(/読み込めていないため保存できません/)).toBeInTheDocument();
+    fireEvent.click(button);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("enables Save once the settings have loaded", async () => {
+    vi.spyOn(tauriApi, "getSettings").mockResolvedValue(baseSettings);
+    vi.spyOn(tauriApi, "googleStatus").mockResolvedValue("signed_out");
+    render(<SettingsScreen onBack={vi.fn()} />);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "保存" })).toBeEnabled());
+    expect(screen.queryByText(/読み込めていないため保存できません/)).not.toBeInTheDocument();
+  });
 });
 
 describe("SettingsScreen — Google タイムライン取り込み", () => {
