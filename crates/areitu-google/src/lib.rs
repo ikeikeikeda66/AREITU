@@ -26,6 +26,9 @@ pub enum Error {
     Keychain(String),
     #[error("calendar sync token expired (HTTP 410)")]
     SyncTokenExpired,
+    /// UI はこのメッセージの先頭 "calendar not authorized" で再同意のヒントを出し分ける。
+    #[error("calendar not authorized (HTTP 401/403): calendar.readonly scope is missing or the token was rejected")]
+    CalendarNotAuthorized,
     #[error("{0}")]
     Invalid(String),
 }

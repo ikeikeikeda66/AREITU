@@ -46,44 +46,70 @@ pub fn sign_in_scope(calendar: bool) -> String {
 /// 取れない場合も、エラーを `summary.errors` に積んで返すだけで、呼び出し元の
 /// 写真同期・visit 構築は止めない。
 pub fn ingest_calendar(conn: &Connection, config: &AppConfig, calendar_state_path: &Path) -> CalendarIngestSummary {
-    let mut summary = CalendarIngestSummary::default();
     if !config.calendar_enabled {
-        return summary;
+        return CalendarIngestSummary::default();
     }
+    let fail = |msg: String| {
+        let mut summary = CalendarIngestSummary::default();
+        summary.errors.push(msg);
+        record_calendar_failure(calendar_state_path, &mut summary);
+        summary
+    };
     let auth = match build_auth() {
         Ok(a) => a,
-        Err(e) => {
-            summary.errors.push(e);
-            return summary;
-        }
+        Err(e) => return fail(e),
     };
     let access_token = match auth.access_token() {
         Ok(t) => t,
-        Err(e) => {
-            summary.errors.push(format!("Google カレンダーに接続できません: {e}"));
-            return summary;
-        }
+        Err(e) => return fail(format!("Google カレンダーに接続できません: {e}")),
     };
     let client = match areitu_google::calendar::CalendarClient::new() {
         Ok(c) => c,
-        Err(e) => {
-            summary.errors.push(e.to_string());
-            return summary;
-        }
+        Err(e) => return fail(e.to_string()),
     };
+    ingest_calendar_with_state_file(conn, &client, &access_token, CALENDAR_ID, calendar_state_path)
+}
+
+/// 複数のエラーを1つの表示用メッセージにまとめる。エラーが無ければ None。
+pub fn calendar_last_error_message(errors: &[String]) -> Option<String> {
+    if errors.is_empty() {
+        None
+    } else {
+        Some(errors.join("; "))
+    }
+}
+
+/// 状態ファイルを読み、1サイクル分の取り込みを行い、同期トークンと直近エラー
+/// （成功なら None）を書き戻す。ネットワーク呼び出しは `api` 経由で、`conn` 以外の
+/// ロックは取らない。
+pub fn ingest_calendar_with_state_file(
+    conn: &Connection,
+    api: &dyn areitu_google::calendar::CalendarApi,
+    access_token: &str,
+    calendar_id: &str,
+    calendar_state_path: &Path,
+) -> CalendarIngestSummary {
     let mut state = match areitu_google::state::load_calendar_state(calendar_state_path) {
         Ok(s) => s,
         Err(e) => {
-            summary.errors.push(e.to_string());
-            return summary;
+            return CalendarIngestSummary { errors: vec![e.to_string()], ..CalendarIngestSummary::default() };
         }
     };
-
-    summary = ingest_calendar_page_bodies(conn, &client, &access_token, CALENDAR_ID, &mut state);
+    let mut summary = ingest_calendar_page_bodies(conn, api, access_token, calendar_id, &mut state);
+    state.last_error = calendar_last_error_message(&summary.errors);
     if let Err(e) = areitu_google::state::save_calendar_state(calendar_state_path, &state) {
         summary.errors.push(e.to_string());
     }
     summary
+}
+
+/// 認証・クライアント生成など、取り込みに入る前の失敗を状態ファイルに残す。
+fn record_calendar_failure(calendar_state_path: &Path, summary: &mut CalendarIngestSummary) {
+    let mut state = areitu_google::state::load_calendar_state(calendar_state_path).unwrap_or_default();
+    state.last_error = calendar_last_error_message(&summary.errors);
+    if let Err(e) = areitu_google::state::save_calendar_state(calendar_state_path, &state) {
+        summary.errors.push(e.to_string());
+    }
 }
 
 /// ブラウザでの認可完了までブロックするため、`spawn_blocking` で Tauri の
@@ -334,6 +360,61 @@ mod tests {
         );
     }
 
+    struct StubApi(std::sync::Mutex<Vec<areitu_google::Result<areitu_google::calendar::EventsPage>>>);
+
+    impl areitu_google::calendar::CalendarApi for StubApi {
+        fn list_events_page(
+            &self,
+            _access_token: &str,
+            _params: &areitu_google::calendar::EventsListParams,
+        ) -> areitu_google::Result<areitu_google::calendar::EventsPage> {
+            self.0.lock().unwrap().remove(0)
+        }
+    }
+
+    #[test]
+    fn calendar_not_authorized_is_persisted_as_last_error_and_cleared_on_next_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("google-calendar-state.json");
+        let c = areitu_core::db::open_in_memory().unwrap();
+
+        let failing = StubApi(std::sync::Mutex::new(vec![Err(areitu_google::Error::CalendarNotAuthorized)]));
+        let summary = ingest_calendar_with_state_file(&c, &failing, "tok", "primary", &path);
+        assert_eq!(summary.errors.len(), 1);
+        let saved = areitu_google::state::load_calendar_state(&path).unwrap();
+        assert_eq!(saved.last_error.as_deref(), Some(areitu_google::Error::CalendarNotAuthorized.to_string().as_str()));
+
+        let ok = StubApi(std::sync::Mutex::new(vec![Ok(areitu_google::calendar::EventsPage {
+            body: r#"{"items":[]}"#.to_owned(),
+            next_page_token: None,
+            next_sync_token: Some("t1".to_owned()),
+        })]));
+        let summary = ingest_calendar_with_state_file(&c, &ok, "tok", "primary", &path);
+        assert!(summary.errors.is_empty());
+        let saved = areitu_google::state::load_calendar_state(&path).unwrap();
+        assert_eq!(saved.last_error, None);
+        assert_eq!(saved.sync_token.as_deref(), Some("t1"));
+    }
+
+    #[test]
+    fn calendar_last_error_joins_messages_and_is_none_when_empty() {
+        assert_eq!(calendar_last_error_message(&[]), None);
+        assert_eq!(calendar_last_error_message(&["a".to_owned(), "b".to_owned()]).as_deref(), Some("a; b"));
+    }
+
+    #[test]
+    fn ingest_calendar_records_auth_failure_as_last_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("google-calendar-state.json");
+        let c = areitu_core::db::open_in_memory().unwrap();
+        let config = crate::config::AppConfig { calendar_enabled: true, ..crate::config::AppConfig::default() };
+        let summary = ingest_calendar(&c, &config, &path);
+        assert!(!summary.errors.is_empty());
+        let saved = areitu_google::state::load_calendar_state(&path).unwrap();
+        assert_eq!(saved.last_error, calendar_last_error_message(&summary.errors));
+        assert!(saved.last_error.is_some());
+    }
+
     #[test]
     fn ingest_calendar_is_a_silent_noop_when_disabled() {
         let dir = tempfile::tempdir().unwrap();
@@ -435,7 +516,7 @@ mod ingest_calendar_page_bodies_tests {
     #[test]
     fn sync_token_expired_clears_token_and_retries_full_sync_once() {
         let c = areitu_core::db::open_in_memory().unwrap();
-        let mut state = CalendarSyncState { sync_token: Some("stale-token".to_owned()) };
+        let mut state = CalendarSyncState { sync_token: Some("stale-token".to_owned()), ..CalendarSyncState::default() };
         // The retry page deliberately carries no next_sync_token. If it did, the final
         // `state.sync_token = fetched.next_sync_token` overwrite at the end of
         // `ingest_calendar_page_bodies` would mask whether the stale token was actually

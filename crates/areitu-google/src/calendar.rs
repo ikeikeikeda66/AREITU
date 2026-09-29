@@ -61,6 +61,9 @@ impl CalendarApi for CalendarClient {
         if resp.status().as_u16() == 410 {
             return Err(crate::Error::SyncTokenExpired);
         }
+        if matches!(resp.status().as_u16(), 401 | 403) {
+            return Err(crate::Error::CalendarNotAuthorized);
+        }
         if !resp.status().is_success() {
             return Err(crate::Error::Http(format!("calendar events.list status {}", resp.status())));
         }
@@ -143,18 +146,31 @@ mod tests {
         assert!(matches!(err, crate::Error::SyncTokenExpired));
     }
 
-    #[test]
-    fn non_success_non_410_status_is_a_generic_http_error() {
+    fn status_error(status: u16) -> crate::Error {
         let server = MockServer::start();
         server.mock(|when, then| {
             when.method(httpmock::Method::GET).path("/calendar/v3/calendars/primary/events");
-            then.status(401);
+            then.status(status);
         });
         let client = CalendarClient::new().unwrap().with_base_url(&server.base_url());
-        let err = client
+        client
             .list_events_page("access", &EventsListParams { calendar_id: "primary", sync_token: None, page_token: None })
-            .unwrap_err();
-        assert!(matches!(err, crate::Error::Http(_)));
+            .unwrap_err()
+    }
+
+    #[test]
+    fn unauthorized_status_maps_to_calendar_not_authorized() {
+        assert!(matches!(status_error(401), crate::Error::CalendarNotAuthorized));
+    }
+
+    #[test]
+    fn forbidden_status_maps_to_calendar_not_authorized() {
+        assert!(matches!(status_error(403), crate::Error::CalendarNotAuthorized));
+    }
+
+    #[test]
+    fn other_non_success_status_is_a_generic_http_error() {
+        assert!(matches!(status_error(500), crate::Error::Http(_)));
     }
 
     #[test]

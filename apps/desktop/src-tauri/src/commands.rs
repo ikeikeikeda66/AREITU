@@ -52,6 +52,8 @@ pub struct SettingsDto {
     pub min_confidence: f64,
     pub poll_interval_minutes: u32,
     pub calendar_enabled: bool,
+    /// 直近のカレンダー同期のエラー。成功していれば null。
+    pub calendar_last_error: Option<String>,
     pub openai_key_status: KeyStatus,
     pub gemini_key_status: KeyStatus,
     pub google_places_key_status: KeyStatus,
@@ -76,6 +78,11 @@ pub struct SaveSettingsDto {
     pub google_places_api_key: Option<String>,
 }
 
+/// 状態ファイルが無い・読めない場合は None（設定画面の表示を止めない）。
+fn read_calendar_last_error(path: &std::path::Path) -> Option<String> {
+    areitu_google::state::load_calendar_state(path).ok().and_then(|s| s.last_error)
+}
+
 #[tauri::command]
 pub fn get_settings(state: State<AppState>) -> SettingsDto {
     let config = load_config(&state.config_path);
@@ -91,6 +98,7 @@ pub fn get_settings(state: State<AppState>) -> SettingsDto {
         min_confidence: config.min_confidence,
         poll_interval_minutes: config.poll_interval_minutes,
         calendar_enabled: config.calendar_enabled,
+        calendar_last_error: read_calendar_last_error(&state.calendar_state_path),
         openai_key_status: key_status(&secrets, OPENAI_KEY),
         gemini_key_status: key_status(&secrets, GEMINI_KEY),
         google_places_key_status: key_status(&secrets, GOOGLE_PLACES_KEY),
@@ -154,6 +162,7 @@ mod tests {
             min_confidence: 0.6,
             poll_interval_minutes: 30,
             calendar_enabled: false,
+            calendar_last_error: Some("boom".to_string()),
             openai_key_status: KeyStatus::NotSet,
             gemini_key_status: KeyStatus::NotSet,
             google_places_key_status: KeyStatus::Unavailable,
@@ -171,6 +180,7 @@ mod tests {
             "minConfidence",
             "pollIntervalMinutes",
             "calendarEnabled",
+            "calendarLastError",
             "openaiKeyStatus",
             "geminiKeyStatus",
             "googlePlacesKeyStatus",
@@ -179,6 +189,23 @@ mod tests {
         }
         assert!(!obj.contains_key("watched_dirs"), "snake_case leaked: {json}");
         assert_eq!(obj.get("googlePlacesKeyStatus").unwrap(), "unavailable");
+        assert_eq!(obj.get("calendarLastError").unwrap(), "boom");
+        assert!(!obj.contains_key("calendar_last_error"), "snake_case leaked: {json}");
+    }
+
+    #[test]
+    fn settings_dto_serializes_missing_calendar_error_as_null() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(read_calendar_last_error(&dir.path().join("none.json")), None);
+    }
+
+    #[test]
+    fn read_calendar_last_error_returns_the_persisted_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("google-calendar-state.json");
+        let state = areitu_google::state::CalendarSyncState { last_error: Some("denied".to_owned()), ..Default::default() };
+        areitu_google::state::save_calendar_state(&path, &state).unwrap();
+        assert_eq!(read_calendar_last_error(&path).as_deref(), Some("denied"));
     }
 
     #[test]

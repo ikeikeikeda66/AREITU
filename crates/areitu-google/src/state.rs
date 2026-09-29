@@ -10,6 +10,10 @@ pub struct SyncState {
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CalendarSyncState {
     pub sync_token: Option<String>,
+    /// 直近のカレンダー同期のエラーメッセージ。成功したら None。
+    /// このフィールド追加前に保存された状態ファイルも読めるよう `default` を付ける。
+    #[serde(default)]
+    pub last_error: Option<String>,
 }
 
 fn read_json_or_default<T: serde::de::DeserializeOwned + Default>(path: &Path) -> crate::Result<T> {
@@ -105,7 +109,7 @@ mod tests {
     fn calendar_state_save_then_load_round_trips() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("google-calendar-state.json");
-        let state = CalendarSyncState { sync_token: Some("token-1".to_owned()) };
+        let state = CalendarSyncState { sync_token: Some("token-1".to_owned()), last_error: Some("boom".to_owned()) };
         save_calendar_state(&path, &state).unwrap();
         assert_eq!(load_calendar_state(&path).unwrap(), state);
     }
@@ -116,5 +120,15 @@ mod tests {
         let path = dir.path().join("google-calendar-state.json");
         std::fs::write(&path, "not json").unwrap();
         assert!(load_calendar_state(&path).is_err());
+    }
+
+    #[test]
+    fn calendar_state_file_written_before_last_error_existed_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("google-calendar-state.json");
+        std::fs::write(&path, r#"{"sync_token":"old-token"}"#).unwrap();
+        let state = load_calendar_state(&path).unwrap();
+        assert_eq!(state.sync_token.as_deref(), Some("old-token"));
+        assert_eq!(state.last_error, None);
     }
 }

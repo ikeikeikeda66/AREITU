@@ -37,6 +37,8 @@ export interface Settings {
   minConfidence: number;
   pollIntervalMinutes: number;
   calendarEnabled: boolean;
+  /** 直近のカレンダー同期のエラーメッセージ。成功していれば null。 */
+  calendarLastError: string | null;
   openaiKeyStatus: KeyStatus;
   geminiKeyStatus: KeyStatus;
   googlePlacesKeyStatus: KeyStatus;

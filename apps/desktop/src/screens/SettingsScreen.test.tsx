@@ -18,6 +18,7 @@ const baseSettings: Settings = {
   minConfidence: 0.6,
   pollIntervalMinutes: 30,
   calendarEnabled: false,
+  calendarLastError: null,
   openaiKeyStatus: "not_set",
   geminiKeyStatus: "not_set",
   googlePlacesKeyStatus: "not_set",
@@ -110,6 +111,43 @@ describe("SettingsScreen — Google アカウント", () => {
     reject("sign-in timed out");
     expect(await screen.findByText("sign-in timed out")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Google でサインイン" })).toBeEnabled();
+  });
+});
+
+describe("SettingsScreen — カレンダー同期エラー", () => {
+  it("shows nothing about errors when the last calendar sync succeeded", async () => {
+    vi.spyOn(tauriApi, "getSettings").mockResolvedValue({ ...baseSettings, calendarEnabled: true });
+    vi.spyOn(tauriApi, "googleStatus").mockResolvedValue("signed_in");
+    render(<SettingsScreen onBack={vi.fn()} />);
+
+    await screen.findByText("サインイン済み");
+    expect(screen.queryByText(/直近のカレンダー同期/)).not.toBeInTheDocument();
+  });
+
+  it("shows the last calendar error with a re-consent hint when access was not authorized", async () => {
+    vi.spyOn(tauriApi, "getSettings").mockResolvedValue({
+      ...baseSettings,
+      calendarEnabled: true,
+      calendarLastError: "calendar not authorized (HTTP 401/403): calendar.readonly scope is missing",
+    });
+    vi.spyOn(tauriApi, "googleStatus").mockResolvedValue("signed_in");
+    render(<SettingsScreen onBack={vi.fn()} />);
+
+    expect(await screen.findByText(/calendar not authorized/)).toBeInTheDocument();
+    expect(screen.getByText(/「カレンダーへのアクセスを許可」/)).toBeInTheDocument();
+  });
+
+  it("shows other calendar errors without the re-consent hint", async () => {
+    vi.spyOn(tauriApi, "getSettings").mockResolvedValue({
+      ...baseSettings,
+      calendarEnabled: true,
+      calendarLastError: "http: timeout",
+    });
+    vi.spyOn(tauriApi, "googleStatus").mockResolvedValue("signed_in");
+    render(<SettingsScreen onBack={vi.fn()} />);
+
+    expect(await screen.findByText(/http: timeout/)).toBeInTheDocument();
+    expect(screen.queryByText(/「カレンダーへのアクセスを許可」/)).not.toBeInTheDocument();
   });
 });
 

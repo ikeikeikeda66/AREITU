@@ -11,6 +11,9 @@ import {
 } from "../api/tauri";
 import type { GoogleStatus, KeyStatus, LlmProvider, Settings } from "../api/types";
 
+// areitu-google の Error::CalendarNotAuthorized のメッセージ先頭と一致させる。
+const CALENDAR_NOT_AUTHORIZED_PREFIX = "calendar not authorized";
+
 function keyStatusLabel(status: KeyStatus): string {
   switch (status) {
     case "set":
@@ -37,6 +40,7 @@ const defaultSettings: Settings = {
   minConfidence: 0.6,
   pollIntervalMinutes: 30,
   calendarEnabled: false,
+  calendarLastError: null,
   openaiKeyStatus: "not_set",
   geminiKeyStatus: "not_set",
   googlePlacesKeyStatus: "not_set",
@@ -321,6 +325,17 @@ export function SettingsScreen({ onBack }: Props) {
           />
           Google カレンダーを自動で取り込む
         </label>
+        {settings.calendarLastError !== null && (
+          <div className="flex flex-col gap-1 rounded-md border border-red-200 bg-red-50 px-3 py-2">
+            <p className="text-sm font-medium text-red-700">直近のカレンダー同期に失敗しました</p>
+            <p className="text-sm text-red-700">{settings.calendarLastError}</p>
+            {settings.calendarLastError.startsWith(CALENDAR_NOT_AUTHORIZED_PREFIX) && (
+              <p className="text-sm text-slate-700">
+                カレンダーへのアクセスが許可されていません。「カレンダーへのアクセスを許可」から Google で再度許可してください。
+              </p>
+            )}
+          </div>
+        )}
         {settings.calendarEnabled && googleAccountStatus === "signed_in" && (
           <>
             <p className="text-sm text-slate-500">
