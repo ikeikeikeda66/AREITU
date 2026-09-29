@@ -32,6 +32,11 @@ cd src-tauri && cargo test   # Rust 側ロジックのテスト（Tauri ラン�
 
 DB は OS のアプリデータディレクトリ配下の `areitu.db` に、非秘密設定は同 config ディレクトリの `config.json` に保存されます。LLM／Google Places の API キーは OS のキーチェーンに保存され、リポジトリやファイルには書き出されません。
 
+## プライバシーポリシー・利用規約
+
+- プライバシーポリシー: https://ikeikeikeda66.github.io/AREITU/privacy.ja.html （[English](https://ikeikeikeda66.github.io/AREITU/privacy.en.html)）
+- 利用規約: https://ikeikeikeda66.github.io/AREITU/terms.ja.html （[English](https://ikeikeikeda66.github.io/AREITU/terms.en.html)）
+
 ## 配布パッケージ（未署名ビルド）
 
 インストーラは GitHub Releases に添付されます。`v*` にマッチするタグを push すると `.github/workflows/release.yml` が macOS（universal）と Windows のビルドを行い、リリースを**下書き**として作成します。macOS 用は `.dmg`、Windows 用は `.msi` と NSIS の `.exe` です（`tauri.conf.json` の `bundle.targets` は `all`）。
