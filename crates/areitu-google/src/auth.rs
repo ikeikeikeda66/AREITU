@@ -31,6 +31,14 @@ pub enum AuthStatus {
     SignedIn,
 }
 
+/// Reads the sign-in state from the token store alone; no client credentials are needed.
+pub fn auth_status(store: &impl crate::keychain::TokenStore) -> crate::Result<AuthStatus> {
+    Ok(match store.load_refresh_token()? {
+        Some(_) => AuthStatus::SignedIn,
+        None => AuthStatus::SignedOut,
+    })
+}
+
 pub struct GoogleAuth<S: crate::keychain::TokenStore, B: BrowserOpener> {
     store: S,
     browser: B,
@@ -50,10 +58,7 @@ impl<S: crate::keychain::TokenStore, B: BrowserOpener> GoogleAuth<S, B> {
     }
 
     pub fn status(&self) -> crate::Result<AuthStatus> {
-        Ok(match self.store.load_refresh_token()? {
-            Some(_) => AuthStatus::SignedIn,
-            None => AuthStatus::SignedOut,
-        })
+        auth_status(&self.store)
     }
 
     pub fn sign_out(&self) -> crate::Result<()> {
@@ -133,6 +138,14 @@ mod tests {
         assert_eq!(auth.status().unwrap(), AuthStatus::SignedIn);
         auth.sign_out().unwrap();
         assert_eq!(auth.status().unwrap(), AuthStatus::SignedOut);
+    }
+
+    #[test]
+    fn auth_status_needs_only_the_token_store() {
+        let store = InMemoryStore::new();
+        assert_eq!(auth_status(&store).unwrap(), AuthStatus::SignedOut);
+        store.save_refresh_token("r").unwrap();
+        assert_eq!(auth_status(&store).unwrap(), AuthStatus::SignedIn);
     }
 
     #[test]

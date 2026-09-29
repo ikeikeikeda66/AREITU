@@ -1,4 +1,4 @@
-use areitu_google::auth::{client_credentials_from_env, AuthStatus, GoogleAuth, SystemBrowser};
+use areitu_google::auth::{auth_status, client_credentials_from_env, AuthStatus, GoogleAuth, SystemBrowser};
 use areitu_google::drive::DriveClient;
 use areitu_google::keychain::KeyringStore;
 use areitu_google::oauth::TokenClient;
@@ -105,7 +105,7 @@ pub fn google_sign_out() -> Result<(), String> {
 
 #[tauri::command]
 pub fn google_status() -> Result<String, String> {
-    let status = build_auth()?.status().map_err(|e| e.to_string())?;
+    let status = auth_status(&KeyringStore).map_err(|e| e.to_string())?;
     Ok(match status {
         AuthStatus::SignedIn => "signed_in".to_owned(),
         AuthStatus::SignedOut => "signed_out".to_owned(),
