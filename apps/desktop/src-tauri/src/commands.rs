@@ -1,4 +1,4 @@
-use tauri::State;
+use tauri::{Manager, State};
 
 use crate::config::{
     config_exists, key_status, load_config, save_config, AppConfig, KeyStatus, KeyringSecretStore, LlmProvider,
@@ -139,10 +139,22 @@ pub fn setup_completed(state: State<AppState>) -> bool {
     config_exists(&state.config_path)
 }
 
+/// 取り込み本体。`sync_lock` を先に取り（sync_lock → conn の順序）、専用接続で 1 トランザクション
+/// として書き込む。`AppState.conn` は使わないので、UI の読み取りは取り込み中もブロックされない。
+fn import_timeline_locked(sync_lock: &std::sync::Mutex<()>, db_path: &std::path::Path, path: &std::path::Path) -> Result<usize, String> {
+    let _guard = sync_lock.lock().map_err(|e| e.to_string())?;
+    let mut conn = areitu_core::db::open(db_path).map_err(|e| e.to_string())?;
+    areitu_core::timeline::ingest_timeline_file(&mut conn, path).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
-pub fn import_timeline_file(state: State<AppState>, path: String) -> Result<usize, String> {
-    let conn = state.conn.lock().map_err(|_| "db lock poisoned".to_string())?;
-    areitu_core::timeline::ingest_timeline_file(&conn, std::path::Path::new(&path)).map_err(|e| e.to_string())
+pub async fn import_timeline_file(app: tauri::AppHandle, path: String) -> Result<usize, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        import_timeline_locked(&state.sync_lock, &state.db_path, std::path::Path::new(&path))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]
@@ -241,13 +253,41 @@ mod tests {
     }
 
     #[test]
-    fn import_timeline_file_delegates_to_the_core_ingest_function() {
-        // コマンドは AppState.conn のロックと ingest_timeline_file への委譲のみ。
-        // パースは areitu-core の timeline::tests で検証済みなので、ここでは
-        // 委譲先のシグネチャが変わっていないことだけを型で確認する。
-        fn _assert_signature(f: fn(&rusqlite::Connection, &std::path::Path) -> areitu_core::Result<usize>) {
-            let _ = f;
-        }
-        _assert_signature(areitu_core::timeline::ingest_timeline_file);
+    fn import_timeline_locked_imports_on_its_own_connection_and_does_not_duplicate() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("areitu.db");
+        let json = dir.path().join("Timeline.json");
+        std::fs::write(
+            &json,
+            r#"{"semanticSegments": [{"startTime": "2026-09-01T12:00:00+09:00", "endTime": "2026-09-01T13:00:00+09:00",
+               "visit": {"topCandidate": {"placeLocation": {"latLng": "35.68, 139.76"}}}}]}"#,
+        )
+        .unwrap();
+        let sync_lock = std::sync::Mutex::new(());
+        // UI 側の接続を保持したままでも取り込める（AppState.conn を使わない）。
+        let ui_conn = areitu_core::db::open(&db_path).unwrap();
+        assert_eq!(import_timeline_locked(&sync_lock, &db_path, &json), Ok(1));
+        assert_eq!(import_timeline_locked(&sync_lock, &db_path, &json), Ok(1));
+        let count: i64 = ui_conn.query_row("SELECT COUNT(*) FROM raw_logs WHERE source = 'timeline'", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn import_timeline_locked_waits_for_sync_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("areitu.db");
+        areitu_core::db::open(&db_path).unwrap();
+        let sync_lock = std::sync::Arc::new(std::sync::Mutex::new(()));
+        let held = sync_lock.lock().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let lock2 = sync_lock.clone();
+        let (db2, json2) = (db_path.clone(), dir.path().join("missing.json"));
+        std::thread::spawn(move || {
+            let _ = import_timeline_locked(&lock2, &db2, &json2);
+            tx.send(()).unwrap();
+        });
+        assert!(rx.recv_timeout(std::time::Duration::from_millis(300)).is_err(), "import ran while sync_lock was held");
+        drop(held);
+        rx.recv_timeout(std::time::Duration::from_secs(5)).expect("import never ran after sync_lock was released");
     }
 }

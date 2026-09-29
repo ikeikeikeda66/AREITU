@@ -152,11 +152,15 @@ pub fn to_raw_log(v: &TimelineVisit) -> RawLog {
     }
 }
 
-pub fn ingest_timeline_file(conn: &Connection, path: &Path) -> Result<usize> {
+/// 取り込みは 1 トランザクション。再取り込みは `upsert_raw_log` により重複しない。
+pub fn ingest_timeline_file(conn: &mut Connection, path: &Path) -> Result<usize> {
     let visits = parse_timeline_export(&std::fs::read_to_string(path)?)?;
+    // 1 トランザクションにまとめる（行ごとの fsync を避け、途中失敗時は全件ロールバックする）。
+    let tx = conn.transaction()?;
     for v in &visits {
-        upsert_raw_log(conn, &to_raw_log(v))?;
+        upsert_raw_log(&tx, &to_raw_log(v))?;
     }
+    tx.commit()?;
     Ok(visits.len())
 }
 
@@ -271,11 +275,28 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("Timeline.json");
         std::fs::write(&path, ON_DEVICE_JSON).unwrap();
-        let conn = crate::db::open_in_memory().unwrap();
-        let inserted = ingest_timeline_file(&conn, &path).unwrap();
+        let mut conn = crate::db::open_in_memory().unwrap();
+        let inserted = ingest_timeline_file(&mut conn, &path).unwrap();
         assert_eq!(inserted, 2);
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM raw_logs WHERE source = 'timeline'", [], |r| r.get(0)).unwrap();
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn ingest_is_atomic_when_a_row_fails_midway() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Timeline.json");
+        std::fs::write(&path, ON_DEVICE_JSON).unwrap();
+        let mut conn = crate::db::open_in_memory().unwrap();
+        // 2 件目（lat 35.7148）の挿入だけを強制的に失敗させる。
+        conn.execute_batch(
+            "CREATE TRIGGER fail_second BEFORE INSERT ON raw_logs WHEN NEW.lat > 35.7
+             BEGIN SELECT RAISE(ABORT, 'forced failure'); END;",
+        )
+        .unwrap();
+        assert!(ingest_timeline_file(&mut conn, &path).is_err());
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM raw_logs", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 0, "a failed import must roll back the rows inserted before the failure");
     }
 
     #[test]
@@ -283,9 +304,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("Timeline.json");
         std::fs::write(&path, ON_DEVICE_JSON).unwrap();
-        let conn = crate::db::open_in_memory().unwrap();
-        ingest_timeline_file(&conn, &path).unwrap();
-        ingest_timeline_file(&conn, &path).unwrap();
+        let mut conn = crate::db::open_in_memory().unwrap();
+        ingest_timeline_file(&mut conn, &path).unwrap();
+        ingest_timeline_file(&mut conn, &path).unwrap();
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM raw_logs WHERE source = 'timeline'", [], |r| r.get(0)).unwrap();
         assert_eq!(count, 2);
     }
@@ -389,7 +410,7 @@ mod tests {
 
     #[test]
     fn ingest_reports_a_missing_file_as_an_error() {
-        let conn = crate::db::open_in_memory().unwrap();
-        assert!(ingest_timeline_file(&conn, Path::new("/nonexistent/Timeline.json")).is_err());
+        let mut conn = crate::db::open_in_memory().unwrap();
+        assert!(ingest_timeline_file(&mut conn, Path::new("/nonexistent/Timeline.json")).is_err());
     }
 }
