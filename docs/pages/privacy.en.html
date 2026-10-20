@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Privacy Policy - AREITU</title>
+  <style>body{font-family:system-ui,sans-serif;max-width:46rem;margin:2rem auto;padding:0 1rem;line-height:1.7;color:#1a1a1a}code{background:#eee;padding:0 .25em}@media(prefers-color-scheme:dark){body{background:#161616;color:#e6e6e6}code{background:#333}a{color:#8ab4f8}}</style>
+</head>
+<body>
+  <h1>Privacy Policy</h1>
+  <p>Last updated: October 19, 2026</p>
+
+  <h2>Overview</h2>
+  <p>
+    AREITU does not run its own server. Your data is never sent to a server operated by the developer, and the
+    developer has no access to it. Your visit-log data (an SQLite database) is stored in the app's private area on
+    your iPhone (the iOS sandbox). If you sign in with your Google account, a copy of this database
+    is also stored in the appDataFolder of your own Google Drive. This folder is not shown in the normal Google Drive
+    UI and is not accessible to anything other than AREITU's OAuth client.
+  </p>
+  <p>
+    AREITU does not add its own encryption to the database. The on-device file is covered by iOS data protection;
+    the copy on Drive is covered by Google's encryption at rest.
+  </p>
+
+  <h2>Data handled</h2>
+  <ul>
+    <li>Capture time and location (latitude/longitude) read from photos in your iPhone photo library, to which you have granted access. The photos themselves are not sent off the device and are not copied into the app.</li>
+    <li>Times, coordinates and place names read from a Google Timeline (Takeout) file that you choose to import in the app. The file itself is only read on your device and is not sent anywhere.</li>
+    <li>Visits derived from them (times, coordinates, inferred place names).</li>
+    <li>Only if you allow calendar access: titles and time ranges of events in your iPhone calendar (EventKit). AREITU does not add or change events.</li>
+  </ul>
+
+  <h2>Google OAuth scopes requested</h2>
+  <p>
+    Requests only drive.appdata. Used only to upload and download the visit-log database (<code>areitu-ios.db</code>)
+    to and from the appDataFolder of your own Google Drive. The same folder also holds a backup copy created when a
+    backup conflict would otherwise overwrite data (<code>areitu-ios-conflict-&lt;timestamp&gt;.db</code>). AREITU does
+    not use Google Calendar: it reads calendar events with iPhone's EventKit, so it does not request any Google Calendar
+    permission.
+  </p>
+  <ul>
+    <li>
+      <code>https://www.googleapis.com/auth/drive.appdata</code>
+    </li>
+  </ul>
+
+  <h2>When data leaves your device</h2>
+  <p>
+    The following is everything AREITU sends over the network. Each destination also receives your IP address as
+    part of the connection.
+  </p>
+  <ul>
+    <li>
+      <strong>Place lookup (reverse geocoding)</strong>: to find the place name of a visit, AREITU sends the visit's
+      latitude and longitude to Apple MapKit (point-of-interest search and address lookup). Apple handles this data
+      under Apple's privacy policy. Coordinates already stored in the in-app dictionary are not sent.
+    </li>
+    <li>
+      <strong>Place-name inference by an on-device LLM (off by default)</strong>: runs only if you turn it on, using
+      Apple's on-device Foundation Models. Prompts are not sent off the device. On unsupported devices the feature is
+      unavailable and the app works without it.
+    </li>
+    <li>
+      <strong>Google sign-in and backup</strong>: if you sign in, AREITU connects to <code>accounts.google.com</code>,
+      <code>oauth2.googleapis.com</code> (authorization, tokens, revocation) and <code>www.googleapis.com</code> (Drive).
+      While you are signed in, a backup runs automatically once every 6 hours during sync, and you can also run one with “今すぐバックアップ” (Back up now) in settings. Each backup saves <code>areitu-ios.db</code> to Drive.
+    </li>
+  </ul>
+  <p>AREITU sends nothing else. It sends no data for advertising or analytics.</p>
+
+  <h2>Google user data (Limited Use)</h2>
+  <p>
+    AREITU's use and transfer to any other app of information received from Google APIs adheres to the
+    <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data
+    Policy</a>, including the Limited Use requirements.
+  </p>
+  <ul>
+    <li>Drive data is used only to back up and restore your database.</li>
+    <li>Google user data is not transferred to the developer or to third parties.</li>
+    <li>Google user data is not used for advertising.</li>
+    <li>The developer does not read Google user data (the developer has no access to it).</li>
+  </ul>
+
+  <h2>Where data is stored</h2>
+  <ul>
+    <li>Visit database: the app-private container in the sandbox</li>
+    <li>Backup state: in the same container</li>
+    <li>Google refresh token: iOS Keychain only (this device only; it is not moved to other devices or backups)</li>
+    <li>Settings: the app's settings store (AREITU does not handle API keys)</li>
+    <li>Drive copy: <code>areitu-ios.db</code> in the appDataFolder of your Google account</li>
+  </ul>
+
+  <h2>How to delete your data</h2>
+  <ol>
+    <li>Tap “この端末のデータをすべて削除” (Delete all data on this device) in the app's settings to delete the visit-log database, sync and backup state, the on-device LLM settings and your Google sign-in on this device, and sign out of Google (the token is removed from the Keychain and a revocation request is sent to Google). Your backup on Google Drive is not deleted.</li>
+    <li>Signing out of Google in settings removes the token from the Keychain and asks Google to revoke it. The backup on Drive remains.</li>
+    <li>
+      To delete the backup on Drive, open Google Drive Settings → Manage apps and delete AREITU's hidden app data.
+      You can remove AREITU's access on your
+      <a href="https://myaccount.google.com/permissions">Google Account's Third-party access page (https://myaccount.google.com/permissions)</a>.
+    </li>
+    <li>Deleting AREITU from your iPhone also deletes the on-device database, sync and backup state, and the on-device LLM settings. On iOS, however, the Google token in the Keychain may remain after the app is deleted, so sign out of Google before deleting the app.</li>
+  </ol>
+
+  <h2>Contact</h2>
+  <p>
+    For questions about this Privacy Policy, please use the
+    <a href="https://github.com/ikeikeikeda66/AREITU/issues">Issues page of the GitHub repository</a>.
+  </p>
+</body>
+</html>

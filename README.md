@@ -1,5 +1,15 @@
 # AREITU
 
+> **お知らせ: デスクトップ版は開発・配布を終了しました。**
+> AREITU は iPhone アプリに方針転換しました。デスクトップ版（Tauri）のコードは [`feat/phase3` ブランチ](https://github.com/ikeikeikeda66/AREITU/tree/feat/phase3) に残していますが、メンテナンスとリリースは行いません。GitHub Releases にインストーラはありません。CI も停止しています。
+>
+> **Notice: the desktop version is discontinued.** AREITU is moving to an iPhone app. The desktop (Tauri) code is kept on the `feat/phase3` branch but is no longer maintained or released. No installers are published.
+
+## プライバシーポリシー・利用規約
+
+- プライバシーポリシー: https://ikeikeikeda66.github.io/AREITU/privacy.ja.html （[English](https://ikeikeikeda66.github.io/AREITU/privacy.en.html)）
+- 利用規約: https://ikeikeikeda66.github.io/AREITU/terms.ja.html （[English](https://ikeikeikeda66.github.io/AREITU/terms.en.html)）
+
 ## Overview
 TBD
 

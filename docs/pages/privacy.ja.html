@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>プライバシーポリシー - AREITU</title>
+  <style>body{font-family:system-ui,sans-serif;max-width:46rem;margin:2rem auto;padding:0 1rem;line-height:1.7;color:#1a1a1a}code{background:#eee;padding:0 .25em}@media(prefers-color-scheme:dark){body{background:#161616;color:#e6e6e6}code{background:#333}a{color:#8ab4f8}}</style>
+</head>
+<body>
+  <h1>プライバシーポリシー</h1>
+  <p>最終更新日: 2026年10月19日</p>
+
+  <h2>基本方針</h2>
+  <p>
+    AREITU は独自のサーバーを持ちません。開発者が運営するサーバーにあなたのデータが送られることはなく、開発者は
+    あなたのデータにアクセスできません。訪問履歴データ（SQLite データベース）は iPhone 内のアプリ専用領域（iOS のサンドボックス）に保存されます。
+    Google アカウントでサインインすると、このデータベースのコピーがあなた自身の Google Drive の
+    アプリデータフォルダ（appDataFolder）にも保存されます。このフォルダは通常の Google Drive 画面には表示
+    されず、AREITU の OAuth クライアント以外からはアクセスできません。
+  </p>
+  <p>
+    AREITU 自身はデータベースを暗号化しません。端末上のファイルは iOS のデータ保護の対象です。Drive 上のコピーには Google による保存時の暗号化が適用されます。
+  </p>
+
+  <h2>取り扱うデータ</h2>
+  <ul>
+    <li>あなたが許可した iPhone の写真ライブラリの写真から読み取った撮影日時と位置情報（緯度・経度）。写真そのものは端末の外に送信せず、アプリ内にも複製しません。</li>
+    <li>あなたがアプリで選んで取り込んだ Google Timeline（Takeout）のファイルから読み取った訪問の日時・座標・場所名。ファイル自体は端末内で読み取るだけで、外部に送信しません。</li>
+    <li>それらから作られた訪問履歴（日時、座標、推定した場所名）。</li>
+    <li>カレンダーへのアクセスを許可した場合のみ、iPhone のカレンダー（EventKit）の予定のタイトルと時間帯。予定の追加や変更は行いません。</li>
+  </ul>
+
+  <h2>リクエストする Google OAuth スコープ</h2>
+  <p>
+    drive.appdata のみを要求します。あなたの Google Drive のアプリデータフォルダに、訪問履歴データベース（<code>areitu-ios.db</code>）をアップロード・ダウンロードするためだけに使います。同じフォルダには、バックアップが競合して上書きする場合の退避コピー（<code>areitu-ios-conflict-日時.db</code>）も作成されます。カレンダーについては Google Calendar を使わず、iPhone の EventKit で読み取るため Google のカレンダー権限は要求しません。
+  </p>
+  <ul>
+    <li>
+      <code>https://www.googleapis.com/auth/drive.appdata</code>
+    </li>
+  </ul>
+
+  <h2>データが端末の外に送信されるケース</h2>
+  <p>以下は、AREITU がネットワークに送信する内容のすべてです。いずれも各送信先に接続元 IP アドレスが伝わります。</p>
+  <ul>
+    <li>
+      <strong>場所名の検索（逆ジオコーディング）</strong>: 訪問の場所名を求めるため、訪問の緯度・経度を Apple の MapKit に送信します（施設検索と住所検索）。Apple 側の取り扱いは Apple のプライバシーポリシーに従います。同じ座標がアプリ内の辞書に登録済みの場合は送信しません。
+    </li>
+    <li>
+      <strong>LLM による場所名推定（既定では無効）</strong>: 設定でオンにした場合のみ動作します。処理は iPhone 内蔵の Apple Foundation Models で端末内で行い、プロンプトは端末の外へ送信されません。非対応の端末では機能自体が使えず、LLM なしで動作します。
+    </li>
+    <li>
+      <strong>Google サインインとバックアップ</strong>: サインインした場合、<code>accounts.google.com</code>、
+      <code>oauth2.googleapis.com</code>（認可、トークン、取り消し）、<code>www.googleapis.com</code>（Drive）と通信します。サインインしている間は、同期のときに 6 時間に 1 回自動でバックアップし、設定画面の「今すぐバックアップ」でも実行できます。バックアップのたびに <code>areitu-ios.db</code> を Drive に保存します。
+    </li>
+  </ul>
+  <p>上記以外の送信は行いません。広告や解析（アナリティクス）のための送信もありません。</p>
+
+  <h2>Google ユーザーデータの取り扱い（Limited Use）</h2>
+  <p>
+    AREITU による Google API から受け取った情報の使用と他のアプリへの転送は、
+    <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API サービスのユーザーデータ
+    ポリシー</a>（Limited Use の要件を含む）に準拠します。
+  </p>
+  <ul>
+    <li>Drive のデータは、あなたのデータベースのバックアップと復元にのみ使います。</li>
+    <li>Google ユーザーデータを開発者や第三者に転送しません。</li>
+    <li>Google ユーザーデータを広告に使いません。</li>
+    <li>開発者が Google ユーザーデータを閲覧することはありません（開発者はデータにアクセスできません）。</li>
+  </ul>
+
+  <h2>データの保存場所</h2>
+  <ul>
+    <li>訪問履歴データベース: アプリ専用領域（サンドボックス内のコンテナ）</li>
+    <li>バックアップ状態: 同コンテナ内</li>
+    <li>Google のリフレッシュトークン: iOS の Keychain のみ（この端末限定。他の端末やバックアップには移りません）</li>
+    <li>設定: アプリの設定領域（AREITU は API キーを扱いません）</li>
+    <li>Drive のコピー: あなたの Google アカウントの appDataFolder（<code>areitu-ios.db</code>）</li>
+  </ul>
+
+  <h2>データの削除方法</h2>
+  <ol>
+    <li>アプリの設定画面の「この端末のデータをすべて削除」を実行すると、この端末の訪問履歴データベース、同期とバックアップの状態、端末内 LLM の設定、Google のサインイン情報を削除し、Google からサインアウトします（Keychain のトークンを削除し、Google に取り消しを要求します）。Google Drive 上のバックアップは削除されません。</li>
+    <li>設定画面の「Google からサインアウト」を実行すると、Keychain のトークンを削除し、Google に取り消しを要求します。Drive 上のバックアップは残ります。</li>
+    <li>
+      Drive 上のバックアップを削除するには、Google ドライブの「設定」→「アプリの管理」で AREITU の非表示のアプリデータを削除してください。AREITU のアクセス権は Google アカウントの<a href="https://myaccount.google.com/permissions">「サードパーティ アクセス」ページ（https://myaccount.google.com/permissions）</a>から削除できます。
+    </li>
+    <li>AREITU を iPhone から削除すると、端末内のデータベース、同期とバックアップの状態、端末内 LLM の設定も削除されます。ただし iOS では、アプリを削除しても Keychain の Google トークンが残る場合があるため、アプリを削除する前に Google からサインアウトしてください。</li>
+  </ol>
+
+  <h2>お問い合わせ</h2>
+  <p>
+    このプライバシーポリシーに関するお問い合わせは
+    <a href="https://github.com/ikeikeikeda66/AREITU/issues">GitHub リポジトリの Issue</a>までお願いします。
+  </p>
+</body>
+</html>
