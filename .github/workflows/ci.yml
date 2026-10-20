@@ -1,8 +1,7 @@
 name: ci
 on:
-  push:
-    branches: [main]
-  pull_request:
+  # Desktop version is discontinued (2026-10). Run manually only.
+  workflow_dispatch:
 jobs:
   test:
     strategy:
